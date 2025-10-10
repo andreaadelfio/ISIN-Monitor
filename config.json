@@ -1,0 +1,25 @@
+{
+  "telegram": {
+    "bot_token": "5116632544:AAElO7YwePh3aXsmHreq55PMyXiqsuAbgP8",
+    "chat_id": "@invmon_chan",
+    "enabled": true,
+    "send_charts": true
+  },
+  "monitoring": {
+    "notification_cooldown_hours": 4,
+    "market_hours_only": true,
+    "market_open_time": "00:00",
+    "market_close_time": "23:59",
+    "price_comparison_days": [1, 7, 30]
+  },
+  "api": {
+    "retry_attempts": 2,
+    "retry_delay_seconds": 2,
+    "request_timeout": 10,
+    "rate_limit_delay": 2
+  },
+  "data": {
+    "isin_config_file": "isin_metadata.csv",
+    "max_history_days": 30
+  }
+}
