@@ -1,6 +1,6 @@
 {
   "telegram": {
-    "bot_token": "5116632544:AAElO7YwePh3aXsmHreq55PMyXiqsuAbgP8",
+    "bot_token": "",
     "chat_id": "@invmon_chan",
     "enabled": true,
     "send_charts": true
