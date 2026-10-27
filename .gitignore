@@ -1,6 +1,11 @@
 /profiling_results
 /__pycache__/
 /*/__pycache__/
+/.pytest_cache/
 *.csv
+# Lo storico locale di prima di Supabase (vedi migrazione.py)
+*.pk
+*.pk.zst
+grafico.png
 # La configurazione vera ha il token del bot Telegram: resta solo sul computer
 config.json

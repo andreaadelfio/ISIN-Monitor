@@ -1,480 +1,179 @@
-# ISIN Monitor# ISIN Monitor# ISIN Monitor# ISIN Monitor
-
-
-
-Sistema di monitoraggio automatico per prezzi di titoli finanziari con notifiche Telegram.
-
-
-
-## 📁 Struttura ProgettoSistema di monitoraggio automatico per prezzi di titoli finanziari con notifiche Telegram.
-
-
-
-```
-
-ISIN Monitor/
-
-├── monitor.py              # Script principale## 📁 Struttura ProgettoSistema di monitoraggio automatico per prezzi di titoli finanziari con notifiche Telegram.Sistema di monitoraggio automatico per prezzi di titoli finanziari con notifiche Telegram.
-
-├── config.json             # Configurazione
-
-├── isin_metadata.csv       # Metadati ticker e ISIN
-
-├── price_history_wide.csv  # Storico prezzi
-
-├── setup.sh                # Script di gestione systemd```
-
-├── requirements.txt        # Dipendenze Python
-
-├── core/                   # Moduli coreISIN Monitor/
-
-│   ├── __init__.py
-
-│   ├── chart_generator.py  # Generazione grafici├── monitor.py              # Script principale## 📁 Struttura Progetto## 🚀 Setup Rapido
-
-│   ├── data_manager.py     # Gestione dati CSV
-
-│   ├── message_templates.py # Template messaggi Telegram├── config.json             # Configurazione
-
-│   ├── price_providers.py  # Provider prezzi (Borsa Italiana)
-
-│   └── utils.py            # Utilità condivise├── isin_metadata.csv       # Metadati ticker e ISIN
-
-└── README.md
-
-```├── price_history_wide.csv  # Storico prezzi
-
-
-
-## 🚀 Setup Rapido├── setup.sh                # Script di gestione systemd```bash
-
-
-
-```bash├── requirements.txt        # Dipendenze Python
-
-./setup.sh install    # Installa servizio systemd
-
-./setup.sh restart    # Riavvia servizio├── core/                   # Moduli coreISIN Monitor/./setup.sh
-
-./setup.sh status     # Controlla stato
-
-./setup.sh logs       # Visualizza log in tempo reale│   ├── __init__.py
-
-./setup.sh test       # Test manuale
-
-```│   ├── chart_generator.py  # Generazione grafici├── monitor.py              # Script principale```
-
-
-
-## ⚙️ Configurazione│   ├── data_manager.py     # Gestione dati CSV
-
-
-
-### config.json│   ├── message_templates.py # Template messaggi Telegram├── config.json             # Configurazione
-
-```json
-
-{│   ├── price_providers.py  # Provider prezzi (Borsa Italiana)
-
-  "telegram": {
-
-    "enabled": true,│   └── utils.py            # Utilità condivise├── isin_metadata.csv       # Metadati ticker e ISIN## ⚙️ Configurazione
-
-    "bot_token": "IL_TUO_BOT_TOKEN",
-
-    "chat_id": "IL_TUO_CHAT_ID",└── README.md
-
-    "send_charts": true
-
-  },```├── price_history_wide.csv  # Storico prezzi
-
-  "monitoring": {
-
-    "notification_cooldown_hours": 1,
-
-    "market_hours_only": true,
-
-    "market_open_time": "08:55",## 🚀 Setup Rapido├── setup.sh                # Script di gestione systemd### config.json
-
-    "market_close_time": "18:05",
-
-    "price_comparison_days": [30, 7]
-
-  },
-
-  "api": {```bash├── requirements.txt        # Dipendenze Python```json
-
-    "rate_limit_delay": 0.5,
-
-    "request_timeout": 10./setup.sh install    # Installa servizio systemd
-
-  }
-
-}./setup.sh restart    # Riavvia servizio├── core/                   # Moduli core{
-
-```
-
-./setup.sh status     # Controlla stato
-
-### isin_metadata.csv
-
-```csv./setup.sh logs       # Visualizza log in tempo reale│   ├── __init__.py  "telegram": {
-
-ticker,isin,company_name,target_discount
-
-ENI.MI,IT0003132476,Eni S.p.A.,0.02./setup.sh test       # Test manuale
-
-NVDA,US67066G1040,NVIDIA Corporation,0.02
-
-ASML.AS,NL0010273215,ASML Holding N.V.,0.02```│   ├── chart_generator.py  # Generazione grafici    "bot_token": "IL_TUO_BOT_TOKEN",
-
-```
-
-
-
-## 🎛️ Controllo
-
-## ⚙️ Configurazione│   ├── data_manager.py     # Gestione dati CSV    "chat_id": "IL_TUO_CHAT_ID"
+# ISIN Monitor
+
+Segue i titoli della watchlist di MyFinance durante l'orario di borsa: ogni 15 secondi
+legge i prezzi su Borsa Italiana, li salva nel database Supabase di MyFinance e manda un
+avviso su Telegram (grafico, tabella e link alla scheda in MyFinance) quando un prezzo si
+muove almeno della soglia del titolo rispetto al prezzo salvato prima.
+
+Ogni mattina, al primo avvio, riempie con Yahoo Finance i buchi dello storico (giorni a
+PC spento) e manda su Telegram i cambiamenti delle proposte di MyFinance.
+
+## Come funziona
+
+- **Titoli**: la tabella `watchlist` di MyFinance (si aggiungono e tolgono dal sito, nella
+  sezione ISIN Monitor). Per ISIN Monitor contano `isin`, `nome`, `simbolo_borsa` (il
+  titolo quotato a Milano su Yahoo, in euro, es. `1AMZN.MI`, `ENI.MI`) e `soglia_avviso`
+  (variazione in % fra due prezzi che fa scattare un avviso, di solito 0,5). L'ultima lista
+  è salvata anche in `~/.local/state/isin-monitor/titoli.json`: se Supabase non risponde,
+  il monitor continua con quella.
+- **Prezzi**: Borsa Italiana, scheda del titolo per ISIN. Un prezzo si salva solo se è
+  cambiato; tutti i prezzi nuovi di un giro vanno nel database con una sola scrittura
+  (tabella `prezzi`, fonte `borsa`). Se Supabase non risponde restano in
+  `~/.local/state/isin-monitor/prezzi_in_sospeso.json` e partono al giro dopo.
+- **Avvisi**: variazione rispetto all'ultimo prezzo salvato ≥ `soglia_avviso` (in su o in
+  giù). Non c'è pausa fra un avviso e l'altro: è voluto. L'avviso ha i link a Fineco,
+  Borsa Italiana e alla scheda in MyFinance (`<myfinance_url>/?isin=<ISIN>`).
+- **Grafici**: solo dallo storico in Supabase, tre richieste per avviso. In alto 360 giorni
+  (una chiusura al giorno, date ogni 15 giorni), 30 e 7 giorni (un prezzo ogni 15 minuti,
+  senza notti e weekend, date per giorno); in basso Oggi (tutti i prezzi di Borsa Italiana
+  di oggi, con i punti verdi sopra l'apertura e rossi sotto) e la tabella con apertura e
+  chiusure di 1, 7, 30 e 360 giorni fa. Il punto rosso è il prezzo attuale.
+- **Proposte**: l'analisi serale di MyFinance assegna a ogni titolo un segnale (Compra, Da
+  valutare, Attendi, Evita per ora) e un punteggio. Al primo avvio del mattino, se un
+  segnale o la proposta del giorno (il "Compra" con il punteggio più alto) sono cambiati,
+  arriva un solo messaggio con i cambiamenti e i link. L'ultimo stato mandato è in
+  `~/.local/state/isin-monitor/proposte.json` (la prima volta si salva senza messaggio).
+
+## Dati in Supabase
+
+Lo schema è in `MyFinance/supabase/schema.sql` (si applica dall'editor SQL di Supabase):
+
+- `watchlist`: i titoli, con le colonne `simbolo_borsa` e `soglia_avviso`;
+- `prezzi`: `isin`, `ts`, `prezzo`, `fonte` (`borsa` o `yahoo`). Al minuto per 60 giorni;
+  più vecchio resta una chiusura al giorno (`sfoltisci_prezzi`, ogni notte con pg_cron);
+- `serie_prezzi(isin, da, passo)`: lo storico già sfoltito, usato dai grafici.
+
+Si accede solo con la chiave **secret** (`sb_secret_...`): il monitor la legge dalla
+variabile `SUPABASE_SECRET_KEY` o dal file `~/.config/isin-monitor/supabase.env`. La
+chiave non va mai in `config.json`, nel repository o nei log.
+
+## Installazione
+
+1. Dipendenze (Anaconda le ha già): `pip install -r requirements.txt`.
+2. `cp config.example.json config.json` e inserisci token e chat id del bot Telegram.
+3. Servizio e timer systemd (anche senza `sudo` davanti: la password la chiede lo script;
+   in tutti e due i casi il servizio gira come il tuo utente, con il tuo python3):
+
+   ```bash
+   sudo ./setup.sh install
+   ```
+
+   La prima volta crea `~/.config/isin-monitor/supabase.env` (permessi 600): scrivici la
+   chiave dopo `SUPABASE_SECRET_KEY=` e rilancia `./setup.sh restart`.
+
+Il timer parte solo in orario di mercato, ogni 15 secondi: gli `OnCalendar` sono generati
+da `market_open_time`/`market_close_time` di `config.json` (con 08:55-18:05:
+`Mon..Fri 08:55..59:00/15`, `Mon..Fri 09..17:*:00/15`, `Mon..Fri 18:00..05:00/15`). Se
+cambi gli orari, rilancia `./setup.sh install`. Lanciato a mano fuori orario,
+`monitor.py` esce subito, prima di caricare pandas e matplotlib.
+
+## Comandi
 
 ```bash
-
-# Status servizio
-
-./setup.sh status
-
-### config.json│   ├── message_templates.py # Template messaggi Telegram  }
-
-# Log in tempo reale
-
-./setup.sh logs```json
-
-
-
-# Test manuale{│   ├── price_providers.py  # Provider prezzi (Borsa Italiana)}
-
-./setup.sh test
-
-  "telegram": {
-
-# Test Telegram
-
-python monitor.py --test-telegram    "enabled": true,│   └── utils.py            # Utilità condivise```
-
+./setup.sh status                     # stato del timer e prossimi avvii
+./setup.sh logs                       # log in tempo reale
+./setup.sh restart | stop | start
+./setup.sh test                       # primo titolo con soglia 0: manda sempre un avviso
+./setup.sh grafico IT0003132476 eni.png   # salva il grafico di un titolo, senza Telegram
+./setup.sh riempi-storico --prova     # quanti punti Yahoo mancano (senza scrivere)
+./setup.sh riempi-storico             # li scrive
+python3 monitor.py --test-telegram    # messaggio di prova
+python3 monitor.py --monitor --ignora-orario   # un giro completo anche fuori orario
 ```
 
-    "bot_token": "IL_TUO_BOT_TOKEN",
+## Configurazione (`config.json`)
 
-## 🔧 Comandi Avanzati
+| Chiave | Significato |
+| --- | --- |
+| `myfinance_url` | indirizzo del sito, per i link `?isin=<ISIN>` |
+| `telegram.bot_token`, `chat_id` | bot e chat degli avvisi |
+| `telegram.enabled`, `send_charts` | avvisi attivi; grafico o solo testo |
+| `monitoring.market_hours_only`, `weekdays_only` | solo in orario di borsa, solo lun-ven |
+| `monitoring.market_open_time`, `market_close_time` | orario (anche del timer systemd) |
+| `monitoring.price_comparison_days` | i tre periodi dei grafici in alto (1 è ignorato) |
+| `monitoring.historical_table_days` | le chiusure nella tabella |
+| `api.request_timeout`, `rate_limit_delay` | timeout delle richieste, pausa fra un titolo e l'altro |
+| `yahoo.enabled`, `timeout`, `max_retries` | riempimento dei buchi con Yahoo |
+| `supabase.url` | progetto Supabase di MyFinance |
+| `test` | `true`: `--monitor` fa il test del primo titolo |
 
-    "chat_id": "IL_TUO_CHAT_ID",└── README.md
+## Storico con Yahoo
+
+Borsa Italiana resta la fonte degli avvisi; Yahoo serve solo a riempire i buchi, mai al
+momento di un avviso. Un buco è un intervallo di 5 minuti (un giorno, per le chiusure)
+senza nessun prezzo nel database: lì si aggiungono i punti di Yahoo con fonte `yahoo`,
+mai per oggi.
+
+- Una tantum (`./setup.sh riempi-storico`): ultimi 7 giorni al minuto, fino a 60 giorni ai
+  5 minuti, l'anno prima una chiusura al giorno (salvata alle 17:30).
+- Ogni mattina, al primo avvio: gli ultimi 7 giorni al minuto (ai 5 minuti se Yahoo non ha
+  il minuto, come per i titoli americani quotati a Milano); per un titolo appena aggiunto
+  senza nessun prezzo, il riempimento completo.
+
+Yahoo usa `simbolo_borsa`; senza, il `simbolo` solo se il titolo è quotato in euro (i
+prezzi in dollari rovinerebbero lo storico).
+
+## Migrazione dallo storico locale (una tantum)
+
+Prima di Supabase titoli e storico stavano in `isin_metadata.csv` e
+`price_history_long.pk.zst`. `migrazione.py` li copia nel database; senza `--scrivi` è
+solo una prova, e rieseguirlo non crea doppioni:
 
 ```bash
+python3 migrazione.py titoli            # cosa cambierebbe nella watchlist
+python3 migrazione.py titoli --scrivi   # titoli mancanti, simbolo_borsa e soglia dal CSV
+python3 migrazione.py storico           # righe per titolo
+python3 migrazione.py storico --scrivi  # copia nei prezzi (fonte borsa) e riconta
+```
 
-# Gestione servizio    "send_charts": true
-
-./setup.sh install      # Installa servizio systemd
-
-./setup.sh uninstall    # Rimuove servizio systemd  },```### isin_config.txt
-
-./setup.sh reinstall    # Reinstalla servizio systemd
-
-./setup.sh start        # Avvia servizio  "monitoring": {
-
-./setup.sh stop         # Ferma servizio
-
-./setup.sh restart      # Riavvia servizio    "notification_cooldown_hours": 1,```
-
-
-
-# Test e debug    "market_hours_only": true,
-
-python monitor.py --check-once    # Test singolo controllo
-
-python monitor.py --monitor       # Controllo normale (usato da systemd)    "market_open_time": "08:55",## 🚀 Setup RapidoIT0003132476:ENI.MI:5
-
-python monitor.py --test-telegram # Test connessione Telegram
-
-```    "market_close_time": "18:05",
-
-
-
-## ⚡ Caratteristiche    "price_comparison_days": [30, 7]US67066G1040:NVDA:5
-
-
-
-- **📊 Grafici automatici**: Generazione automatica di grafici con prezzi storici  },
-
-- **📱 Notifiche Telegram**: Invio automatico di grafici e messaggi
-
-- **⏰ Controllo orari**: Monitoraggio solo durante orari di mercato  "api": {```bash```
-
-- **🚫 Anti-spam**: Cooldown per evitare notifiche duplicate
-
-- **📈 Multi-timeframe**: Confronto prezzi su più periodi (7, 30, 90, 365 giorni)    "rate_limit_delay": 0.5,
-
-- **💾 Ottimizzazioni**: Salvataggio prezzi solo se cambiati
-
-- **🔄 Rate limiting**: Protezione contro limitazioni API    "request_timeout": 10./setup.sh install    # Installa servizio systemd
-
-- **🧪 Modalità test**: Test con target_discount=0 per forzare notifiche
-
-  }
-
-## 📋 Log e Debugging
-
-}./setup.sh restart    # Riavvia servizio## 🎛️ Controllo
-
-Il sistema genera log dettagliati visibili con:
-
-```bash```
-
-./setup.sh logs
-
-```./setup.sh status     # Controlla stato
-
-
-
-I log includono:### isin_metadata.csv
-
-- ✅ Prezzi aggiornati vs ⏭️ prezzi invariati
-
-- 🎯 Variazioni significative```csv./setup.sh logs       # Visualizza log in tempo reale```bash
-
-- 📊 Sconti attuali rispetto ai massimi storici
-
-- ❌ Errori di connessione o APIticker,isin,company_name,target_discount
-
-
-
-## 🎯 Modalità OperativeENI.MI,IT0003132476,Eni S.p.A.,0.02./setup.sh test       # Test manuale# Status
-
-
-
-### Produzione (Systemd)NVDA,US67066G1040,NVIDIA Corporation,0.02
-
-Il sistema funziona automaticamente tramite systemd timer ogni 15 secondi:
-
-- Controlla tutti i ticker configuratiASML.AS,NL0010273215,ASML Holding N.V.,0.02```systemctl status isin-monitor.timer
-
-- Usa i target_discount dal CSV
-
-- Invia notifiche solo per variazioni significative```
-
-
-
-### Test Manuale
+Un titolo del CSV con un ISIN diverso da quello della watchlist per lo stesso ticker non
+viene toccato e va deciso a mano. Se è giusto quello del CSV (come per Telecom Italia), si
+corregge la watchlist prima di "titoli", finché il titolo non ha prezzi salvati:
 
 ```bash
-
-./setup.sh test## 🎛️ Controllo
-
+python3 migrazione.py cambia-isin IT0003497168 IT0005712671 --scrivi
 ```
 
-- Controlla solo il primo ticker## ⚙️ Configurazione# Log
-
-- Forza target_discount=0 per generare sempre notifica
-
-- Utile per testare grafici e messaggi```bash
-
-
-
-### Debug# Status serviziojournalctl -fu isin-monitor.service
+## Sviluppo e test
 
 ```bash
-
-./setup.sh logs./setup.sh status
-
+python3 -m pytest tests                 # test con database, Borsa e Telegram finti
 ```
 
-- Mostra log in tempo reale### config.json
+`dev/supabase_locale.py` avvia un finto Supabase locale (Postgres + PostgREST, con le
+tabelle di `schema.sql`) per provare tutto senza toccare il database vero; le istruzioni
+sono in cima al file.
 
-- Aggiornamento ogni secondo
-
-- Premi Ctrl+C per uscire# Log in tempo reale
-
-
-
-## 💡 Tips./setup.sh logs```json# Test
-
-
-
-- **Primo avvio**: Il sistema inizializza i prezzi di riferimento al primo controllo
-
-- **Rate limiting**: Delay di 0.5s tra richieste per evitare blocchi API
-
-- **Orari mercato**: Per default attivo solo 08:55-18:05 (configurabile)# Test manuale{python monitor.py --test-telegram
-
-- **Cooldown**: Notifiche max 1 volta/ora per stesso livello di variazione
-./setup.sh test
-
-  "telegram": {python test_nvidia.py
-
-# Test Telegram
-
-python monitor.py --test-telegram    "enabled": true,```
+Struttura:
 
 ```
-
-    "bot_token": "IL_TUO_BOT_TOKEN",
-
-## 🔧 Comandi Avanzati
-
-    "chat_id": "IL_TUO_CHAT_ID",## � Comandi
-
-```bash
-
-# Gestione servizio    "send_charts": true
-
-./setup.sh install      # Installa servizio systemd
-
-./setup.sh uninstall    # Rimuove servizio systemd  },```bash
-
-./setup.sh reinstall    # Reinstalla servizio systemd
-
-./setup.sh start        # Avvia servizio  "monitoring": {# Start/Stop
-
-./setup.sh stop         # Ferma servizio
-
-./setup.sh restart      # Riavvia servizio    "notification_cooldown_hours": 1,sudo systemctl start isin-monitor.timer
-
-
-
-# Test e debug    "market_hours_only": true,sudo systemctl stop isin-monitor.timer
-
-python monitor.py --check-once    # Test singolo controllo
-
-python monitor.py --monitor       # Controllo normale (usato da systemd)    "market_open_time": "08:55",
-
-python monitor.py --test-telegram # Test connessione Telegram
-
-```    "market_close_time": "18:05",# Test manuale
-
-
-
-## ⚡ Caratteristiche    "price_comparison_days": [30, 7]python monitor.py --check-once
-
-
-
-- **📊 Grafici automatici**: Generazione automatica di grafici con prezzi storici  },```
-
-- **📱 Notifiche Telegram**: Invio automatico di grafici e messaggi  "api": {
-
-- **⏰ Controllo orari**: Monitoraggio solo durante orari di mercato    "rate_limit_delay": 0.5,
-
-- **🚫 Anti-spam**: Cooldown per evitare notifiche duplicate    "request_timeout": 10
-
-- **📈 Multi-timeframe**: Confronto prezzi su più periodi (7, 30, 90, 365 giorni)  }
-
-- **💾 Ottimizzazioni**: Salvataggio prezzi solo se cambiati}
-
-- **🔄 Rate limiting**: Protezione contro limitazioni API```
-
-- **🧪 Modalità test**: Test con target_discount=0 per forzare notifiche
-
-### isin_metadata.csv
-
-## 📋 Log e Debugging```csv
-
-ticker,isin,company_name,target_discount
-
-Il sistema genera log dettagliati visibili con:ENI.MI,IT0003132476,Eni S.p.A.,0.02
-
-```bashNVDA,US67066G1040,NVIDIA Corporation,0.02
-
-./setup.sh logsASML.AS,NL0010273215,ASML Holding N.V.,0.02
-
-``````
-
-
-
-I log includono:## 🎛️ Controllo
-
-- ✅ Prezzi aggiornati vs ⏭️ prezzi invariati
-
-- 🎯 Variazioni significative```bash
-
-- 📊 Sconti attuali rispetto ai massimi storici# Status servizio
-
-- ❌ Errori di connessione o API./setup.sh status
-
-
-
-## 🎯 Modalità Operative# Log in tempo reale
-
-./setup.sh logs
-
-### Produzione (Systemd)
-
-Il sistema funziona automaticamente tramite systemd timer ogni 15 secondi:# Test manuale
-
-- Controlla tutti i ticker configurati./setup.sh test
-
-- Usa i target_discount dal CSV
-
-- Invia notifiche solo per variazioni significative# Test Telegram
-
-python monitor.py --test-telegram
-
-### Test Manual```
-
-```bash
-
-./setup.sh test## 🔧 Comandi Avanzati
-
+monitor.py            punto d'ingresso (controllo d'orario, poi core/app.py)
+migrazione.py         migrazione una tantum di CSV e storico locale
+setup.sh              servizio e timer systemd
+core/app.py           il giro di controllo, avvisi, lavori del mattino
+core/database.py      Supabase (watchlist, prezzi, serie_prezzi)
+core/price_providers.py  Borsa Italiana e Yahoo
+core/storico.py       riempimento dei buchi con Yahoo
+core/chart_generator.py  grafici
+core/proposte.py      cambiamenti delle proposte di MyFinance
+core/orario.py        orario di mercato e OnCalendar del timer
+core/stato.py         file di stato in ~/.local/state/isin-monitor
+core/message_templates.py, core/utils.py   testo e tabella degli avvisi
+tests/                test (pytest)
 ```
 
-- Controlla solo il primo ticker```bash
+## Problemi frequenti
 
-- Forza target_discount=0 per generare sempre notifica# Gestione servizio
-
-- Utile per testare grafici e messaggi./setup.sh install      # Installa servizio systemd
-
-./setup.sh uninstall    # Rimuove servizio systemd
-
-### Debug./setup.sh reinstall    # Reinstalla servizio systemd
-
-```bash./setup.sh start        # Avvia servizio
-
-./setup.sh logs./setup.sh stop         # Ferma servizio
-
-```./setup.sh restart      # Riavvia servizio
-
-- Mostra log in tempo reale
-
-- Aggiornamento ogni secondo# Test e debug
-
-- Premi Ctrl+C per uscirepython monitor.py --check-once    # Test singolo controllo
-
-python monitor.py --monitor       # Controllo normale (usato da systemd)
-
-## 💡 Tipspython monitor.py --test-telegram # Test connessione Telegram
-
-```
-
-- **Primo avvio**: Il sistema inizializza i prezzi di riferimento al primo controllo
-
-- **Rate limiting**: Delay di 0.5s tra richieste per evitare blocchi API## ⚡ Caratteristiche
-
-- **Orari mercato**: Per default attivo solo 08:55-18:05 (configurabile)
-
-- **Cooldown**: Notifiche max 1 volta/ora per stesso livello di variazione- **📊 Grafici automatici**: Generazione automatica di grafici con prezzi storici
-- **📱 Notifiche Telegram**: Invio automatico di grafici e messaggi
-- **⏰ Controllo orari**: Monitoraggio solo durante orari di mercato
-- **🚫 Anti-spam**: Cooldown per evitare notifiche duplicate
-- **📈 Multi-timeframe**: Confronto prezzi su più periodi (7, 30, 90, 365 giorni)
-- **💾 Ottimizzazioni**: Salvataggio prezzi solo se cambiati
-- **🔄 Rate limiting**: Protezione contro limitazioni API
-- **🧪 Modalità test**: Test con target_discount=0 per forzare notifiche
-
-## 📋 Log e Debugging
-
-Il sistema genera log dettagliati visibili con:
-```bash
-./setup.sh logs
-```
-
-I log includono:
-- ✅ Prezzi aggiornati vs ⏭️ prezzi invariati
-- 🎯 Variazioni significative
-- 📊 Sconti attuali rispetto ai massimi storici
-- ❌ Errori di connessione o API
+- **"Chiave Supabase mancante"**: manca `SUPABASE_SECRET_KEY` in
+  `~/.config/isin-monitor/supabase.env` (o il servizio non ha `EnvironmentFile=`: rilancia
+  `./setup.sh install`).
+- **"Uso l'ultima lista salvata"**: Supabase non risponde; i prezzi aspettano in locale e
+  partono appena torna. Un `401` vuol dire chiave sbagliata o revocata.
+- **"Nessun prezzo per ..."**: Borsa Italiana non ha la scheda di quell'ISIN (titolo non
+  quotato a Milano o ISIN cambiato): correggi l'ISIN dal sito.
+- **Nessun avviso**: guarda `./setup.sh logs`; fuori orario il timer non parte;
+  `./setup.sh test` prova Telegram con un avviso vero.
+- **Grafici vuoti o con buchi**: `./setup.sh riempi-storico --prova` dice quanti punti
+  mancano; un titolo senza `simbolo_borsa` non viene riempito da Yahoo.
+- **Timer che non parte**: `./setup.sh status` mostra i prossimi avvii; dopo aver cambiato
+  gli orari serve `./setup.sh install`.

@@ -1,97 +1,31 @@
 #!/usr/bin/env python3
 """
-Provider di prezzi semplificato per Borsa Italiana
+Fonti dei prezzi: Borsa Italiana (in tempo reale, per gli avvisi) e Yahoo Finance
+(solo per riempire i buchi dello storico, mai al momento di un avviso).
 """
 
 import requests
 import re
 import pandas as pd
 from typing import Any, Dict, Optional, Tuple
-from datetime import datetime, timedelta
+from datetime import datetime
 import time
 from .profiler import profile
 
 
 class BorsaItalianaProvider:
-    """Provider per Borsa Italiana con estrazione prezzo migliorata."""
-    
-    def __init__(self):
-        self.metadata_df = self._load_metadata()
-        self._isin_by_ticker = dict(
-            zip(self.metadata_df.get('ticker', []), self.metadata_df.get('isin', []))
-        )
-        self._name_by_ticker = dict(
-            zip(self.metadata_df.get('ticker', []), self.metadata_df.get('company_name', []))
-        )
-        # Sessione condivisa: riusa la connessione HTTPS tra un ticker e l'altro
+    """Prezzo in tempo reale dalla scheda del titolo su Borsa Italiana (per ISIN)."""
+
+    def __init__(self, timeout: float = 10):
+        self.timeout = timeout
+        # Sessione condivisa: riusa la connessione HTTPS tra un titolo e l'altro
         self.session = requests.Session()
-        
-    def _load_metadata(self):
-        """Carica i metadati dal CSV."""
-        try:
-            return pd.read_csv("isin_metadata.csv")
-        except Exception as e:
-            print(f"⚠️ Errore caricamento metadati: {e}")
-            return pd.DataFrame(columns=['ticker', 'isin', 'company_name', 'target_discount'])
 
     @profile()
-
-    def get_isin_for_ticker(self, ticker: str) -> Optional[str]:
-        """Converte ticker in ISIN."""
-        isin = self._isin_by_ticker.get(ticker)
-        if not isin:
-            print(f"⚠️ Ticker {ticker} non trovato")
-            return None
-        return isin
-
-    @profile()
-
-    def get_price(self, ticker: str) -> Tuple[Optional[float], Optional[datetime]]:
-        """Ottiene il prezzo per un ticker."""
-        print(f"🔄 Converto {ticker} → ISIN", end="")
-        isin = self.get_isin_for_ticker(ticker)
-        if not isin:
-            return None, None
-        print(f" {isin}")
-        
-        price, company_name, timestamp = self._fetch_data_for_isin(isin)
-        
-        # Aggiorna il nome dell'azienda nel metadata se trovato
-        if company_name:
-            self._update_company_name_in_metadata(ticker, company_name)
-        
-        return price, timestamp
-
-    @profile()
-
-    def get_company_name(self, ticker: str) -> Optional[str]:
-        """Ottiene il nome dell'azienda per un ticker."""
-        # Prima controlla se abbiamo già il nome nei metadati
-        existing_name = self._name_by_ticker.get(ticker)
-        if pd.notna(existing_name) and existing_name and existing_name != ticker:
-            return existing_name
-        
-        # Se non abbiamo il nome, recuperalo via web
-        isin = self.get_isin_for_ticker(ticker)
-        if not isin:
-            return ticker
-        
-        _, company_name, _ = self._fetch_data_for_isin(isin)
-        
-        if company_name:
-            self._update_company_name_in_metadata(ticker, company_name)
-            return company_name
-        
-        return ticker
-
-    def _update_company_name_in_metadata(self, ticker: str, company_name: str):
-        """Aggiorna il nome dell'azienda nei metadati in memoria."""
-        self._name_by_ticker[ticker] = company_name
-        ticker_idx = self.metadata_df.index[
-            self.metadata_df['ticker'] == ticker
-        ]
-        if len(ticker_idx) > 0:
-            self.metadata_df.loc[ticker_idx[0], 'company_name'] = company_name
+    def get_price(self, isin: str) -> Tuple[Optional[float], Optional[str]]:
+        """Prezzo e nome del titolo, oppure (None, None)."""
+        price, company_name, _ = self._fetch_data_for_isin(isin)
+        return price, company_name
 
     def _fetch_data_for_isin(self, isin: str) -> Tuple[Optional[float], Optional[str], Optional[datetime]]:
         """Recupera prezzo e nome azienda per un ISIN in una singola richiesta."""
@@ -107,7 +41,7 @@ class BorsaItalianaProvider:
         
         for market_type, url in markets:
             try:
-                response = self.session.get(url, headers=headers, timeout=10)
+                response = self.session.get(url, headers=headers, timeout=self.timeout)
                 if response.status_code == 200:
                     html_content = response.text
                     
@@ -235,7 +169,7 @@ class BorsaItalianaProvider:
 
 
 class YahooFinanceProvider:
-    """Provider Yahoo per lo storico usato esclusivamente dai grafici."""
+    """Storico Yahoo (chart API) per riempire i buchi della tabella prezzi."""
 
     URL = "https://query2.finance.yahoo.com/v8/finance/chart"
 
@@ -243,53 +177,15 @@ class YahooFinanceProvider:
         settings = config or {}
         self.timeout = int(settings.get("timeout", 20))
         self.max_retries = max(0, int(settings.get("max_retries", 2)))
-        self.cache_ttl = max(0, int(settings.get("cache_ttl_seconds", 300)))
         self.session = requests.Session()
         self.session.headers.update({"User-Agent": "ISIN-Monitor/1.0"})
-        self._history_cache: Dict[str, Tuple[datetime, pd.DataFrame]] = {}
 
-    def get_history(
-        self,
-        ticker: str,
-        isin: str,
-        daily_range: str = "1y",
-        intraday_range: str = "1mo",
-        intraday_interval: str = "1h",
-    ) -> pd.DataFrame:
-        """Scarica storico giornaliero e intraday, mantenendolo solo in memoria."""
-        cached = self._history_cache.get(ticker)
-        if cached and datetime.now() - cached[0] < timedelta(seconds=self.cache_ttl):
-            return cached[1].copy()
+    def get_series(self, symbol: str, period: str, interval: str) -> pd.DataFrame:
+        """Prezzi di chiusura di ogni barra: colonne ts (UTC) e price.
 
-        daily = self._fetch_series(ticker, daily_range, "1d", isin)
-        intraday = self._fetch_series(
-            ticker, intraday_range, intraday_interval, isin
-        )
-        history = pd.concat([daily, intraday], ignore_index=True)
-        history = (
-            history.drop_duplicates(subset=["timestamp"], keep="last")
-            .sort_values("timestamp")
-            .reset_index(drop=True)
-        )
-        if history.empty:
-            raise ValueError(f"Nessun dato storico restituito da Yahoo per {ticker}")
-
-        self._history_cache[ticker] = (datetime.now(), history)
-        return history.copy()
-
-    def get_price(
-        self, ticker: str, isin: str
-    ) -> Tuple[Optional[float], Optional[datetime]]:
-        """Restituisce l'ultima chiusura disponibile come fallback realtime."""
-        history = self._fetch_series(ticker, "5d", "1d", isin)
-        if history.empty:
-            return None, None
-        last_row = history.iloc[-1]
-        return float(last_row["price"]), last_row["timestamp"].to_pydatetime()
-
-    def _fetch_series(
-        self, ticker: str, period: str, interval: str, isin: str
-    ) -> pd.DataFrame:
+        Es. period '7d' con interval '1m', '60d' con '5m', '1y' con '1d'
+        (Yahoo dà il dato al minuto solo per gli ultimi 7 giorni, ai 5 minuti per 60).
+        """
         params = {
             "range": period,
             "interval": interval,
@@ -301,7 +197,7 @@ class YahooFinanceProvider:
         for attempt in range(self.max_retries + 1):
             try:
                 response = self.session.get(
-                    f"{self.URL}/{ticker}", params=params, timeout=self.timeout
+                    f"{self.URL}/{symbol}", params=params, timeout=self.timeout
                 )
                 if response.status_code == 429 and attempt < self.max_retries:
                     time.sleep(2 ** attempt)
@@ -312,7 +208,7 @@ class YahooFinanceProvider:
                 if not result:
                     error = payload.get("chart", {}).get("error")
                     raise ValueError(f"Risposta Yahoo vuota: {error}")
-                return self._result_to_frame(result[0], ticker, isin)
+                return self._result_to_frame(result[0])
             except (requests.RequestException, ValueError, KeyError, TypeError) as error:
                 last_error = error
                 if attempt < self.max_retries:
@@ -321,34 +217,19 @@ class YahooFinanceProvider:
                 break
 
         raise RuntimeError(
-            f"Impossibile scaricare lo storico Yahoo per {ticker}: {last_error}"
+            f"Impossibile scaricare lo storico Yahoo per {symbol}: {last_error}"
         )
 
     @staticmethod
-    def _result_to_frame(
-        result: Dict[str, Any], ticker: str, isin: str
-    ) -> pd.DataFrame:
-        timestamps = result.get("timestamp", [])
-        quote = result.get("indicators", {}).get("quote", [{}])[0]
-        history = pd.DataFrame(
+    def _result_to_frame(result: Dict[str, Any]) -> pd.DataFrame:
+        timestamps = result.get("timestamp") or []
+        quote = (result.get("indicators", {}).get("quote") or [{}])[0]
+        series = pd.DataFrame(
             {
-                "timestamp": pd.to_datetime(timestamps, unit="s", utc=True)
-                .tz_convert("Europe/Rome")
-                .tz_localize(None),
-                "price": quote.get("close", []),
+                "ts": pd.to_datetime(timestamps, unit="s", utc=True),
+                "price": pd.to_numeric(pd.Series(quote.get("close") or [None] * len(timestamps)),
+                                       errors="coerce"),
             }
-        ).dropna(subset=["timestamp", "price"])
-        history["ticker"] = ticker
-        history["isin"] = isin
-        history["price"] = pd.to_numeric(history["price"], errors="coerce")
-        history = history.dropna(subset=["price"])
-        if (history["price"] <= 0).any():
-            raise ValueError(f"Prezzi Yahoo non validi per {ticker}")
-        return history.sort_values("timestamp").reset_index(drop=True)
-
-
-@profile()
-
-def get_provider():
-    """Restituisce il provider."""
-    return BorsaItalianaProvider()
+        ).dropna()
+        series = series[series["price"] > 0]
+        return series.sort_values("ts").reset_index(drop=True)

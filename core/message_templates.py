@@ -3,6 +3,7 @@
 Template delle caption per grafici ISIN Monitor
 """
 
+from html import escape
 from typing import Dict, Optional, List
 from .utils import NumberFormatter
 from .profiler import profile
@@ -27,30 +28,33 @@ class CaptionTemplates:
 
     @staticmethod
     @profile()
-    def format_caption(isin_data: Dict, current_price: float, table_data: Optional[List[Dict]] = None) -> str:
+    def format_caption(isin_data: Dict, current_price: float, table_data: Optional[List[Dict]] = None,
+                       myfinance_url: Optional[str] = None) -> str:
         """
         Template per caption dei grafici Telegram
         
         Args:
-            isin_data: Dati ISIN con ticker, target_discount, etc.
+            isin_data: Dati del titolo (isin, nome)
             table_data: Dati pre-calcolati della tabella (richiesti)
+            myfinance_url: Link alla scheda del titolo in MyFinance
         """
         
         # Link cliccabili per varie piattaforme
         isin_code = isin_data['isin']
-        ticker = isin_data['ticker']
         
         fineco_url = f"https://finecobank.com/pvt/trading/snapshot/{isin_code}.AFF"
         borsa_url = f"https://www.borsaitaliana.it/borsa/azioni/scheda/{isin_code}.html"
+        links = [f'<a href="{fineco_url}">Fineco</a>', f'<a href="{borsa_url}">Borsa IT</a>']
+        if myfinance_url:
+            links.append(f'<a href="{myfinance_url}">MyFinance</a>')
         
-        # Nome dell'azienda (fallback su ticker se non disponibile)
-        company_name = isin_data.get('company_name', ticker)
+        company_name = escape(isin_data.get('nome') or isin_code)
         
         # Usa i dati pre-calcolati (devono essere sempre forniti)
         if table_data is None:
-            return f"{company_name}: Dati non disponibili"
+            return f"{company_name}: Dati non disponibili ({' | '.join(links)})"
 
-        message = f"""{company_name}, €{current_price} (<a href="{fineco_url}">Fineco</a> | <a href="{borsa_url}">Borsa IT</a>)"""
+        message = f"""{company_name}, €{current_price} ({' | '.join(links)})"""
         message += """\n\n<code>"""
 
         # Aggiungi tutte le altre righe (esclusa "Now")

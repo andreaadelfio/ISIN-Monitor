@@ -1,3 +1,7 @@
-requests==2.31.0
-yfinance==0.2.28
-pandas==2.1.4
+requests>=2.31
+pandas>=2.1
+matplotlib>=3.8
+# solo per migrazione.py storico (legge price_history_long.pk.zst)
+zstandard
+# solo per i test
+pytest
