@@ -2,3 +2,5 @@
 /__pycache__/
 /*/__pycache__/
 *.csv
+# La configurazione vera ha il token del bot Telegram: resta solo sul computer
+config.json

@@ -46,7 +46,8 @@ class TableDataGenerator:
     @profile()
     def generate_table_data(current_price: float, opening_price: Optional[float] = None, 
                            previous_price: Optional[float] = None, 
-                           historical_prices: Optional[Dict[int, float]] = None):
+                           historical_prices: Optional[Dict[int, float]] = None,
+                           oldest_price: Optional[float] = None):
         """
         Genera i dati per la tabella in formato standardizzato.
         
@@ -94,4 +95,15 @@ class TableDataGenerator:
                         'reference_price': price
                     })
         
+        if oldest_price is not None and oldest_price > 0:
+            price_diff = current_price - oldest_price
+            variation = (price_diff / oldest_price) * 100
+            table_rows.append({
+                'label': 'Oldest',
+                'price': oldest_price,
+                'variation': variation,
+                'difference': price_diff,
+                'reference_price': oldest_price
+            })
         return table_rows
+    

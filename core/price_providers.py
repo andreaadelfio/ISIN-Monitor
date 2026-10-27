@@ -6,8 +6,9 @@ Provider di prezzi semplificato per Borsa Italiana
 import requests
 import re
 import pandas as pd
-from typing import Optional, Tuple
-from datetime import datetime
+from typing import Any, Dict, Optional, Tuple
+from datetime import datetime, timedelta
+import time
 from .profiler import profile
 
 
@@ -16,6 +17,14 @@ class BorsaItalianaProvider:
     
     def __init__(self):
         self.metadata_df = self._load_metadata()
+        self._isin_by_ticker = dict(
+            zip(self.metadata_df.get('ticker', []), self.metadata_df.get('isin', []))
+        )
+        self._name_by_ticker = dict(
+            zip(self.metadata_df.get('ticker', []), self.metadata_df.get('company_name', []))
+        )
+        # Sessione condivisa: riusa la connessione HTTPS tra un ticker e l'altro
+        self.session = requests.Session()
         
     def _load_metadata(self):
         """Carica i metadati dal CSV."""
@@ -29,11 +38,11 @@ class BorsaItalianaProvider:
 
     def get_isin_for_ticker(self, ticker: str) -> Optional[str]:
         """Converte ticker in ISIN."""
-        ticker_row = self.metadata_df[self.metadata_df['ticker'] == ticker]
-        if ticker_row.empty:
+        isin = self._isin_by_ticker.get(ticker)
+        if not isin:
             print(f"⚠️ Ticker {ticker} non trovato")
             return None
-        return ticker_row.iloc[0]['isin']
+        return isin
 
     @profile()
 
@@ -58,11 +67,9 @@ class BorsaItalianaProvider:
     def get_company_name(self, ticker: str) -> Optional[str]:
         """Ottiene il nome dell'azienda per un ticker."""
         # Prima controlla se abbiamo già il nome nei metadati
-        ticker_row = self.metadata_df[self.metadata_df['ticker'] == ticker]
-        if not ticker_row.empty:
-            existing_name = ticker_row.iloc[0].get('company_name')
-            if existing_name and existing_name != ticker:
-                return existing_name
+        existing_name = self._name_by_ticker.get(ticker)
+        if pd.notna(existing_name) and existing_name and existing_name != ticker:
+            return existing_name
         
         # Se non abbiamo il nome, recuperalo via web
         isin = self.get_isin_for_ticker(ticker)
@@ -79,8 +86,11 @@ class BorsaItalianaProvider:
 
     def _update_company_name_in_metadata(self, ticker: str, company_name: str):
         """Aggiorna il nome dell'azienda nei metadati in memoria."""
-        ticker_idx = self.metadata_df[self.metadata_df['ticker'] == ticker].index
-        if not ticker_idx.empty:
+        self._name_by_ticker[ticker] = company_name
+        ticker_idx = self.metadata_df.index[
+            self.metadata_df['ticker'] == ticker
+        ]
+        if len(ticker_idx) > 0:
             self.metadata_df.loc[ticker_idx[0], 'company_name'] = company_name
 
     def _fetch_data_for_isin(self, isin: str) -> Tuple[Optional[float], Optional[str], Optional[datetime]]:
@@ -97,7 +107,7 @@ class BorsaItalianaProvider:
         
         for market_type, url in markets:
             try:
-                response = requests.get(url, headers=headers, timeout=10)
+                response = self.session.get(url, headers=headers, timeout=10)
                 if response.status_code == 200:
                     html_content = response.text
                     
@@ -222,6 +232,120 @@ class BorsaItalianaProvider:
                 
         except (ValueError, TypeError):
             return None
+
+
+class YahooFinanceProvider:
+    """Provider Yahoo per lo storico usato esclusivamente dai grafici."""
+
+    URL = "https://query2.finance.yahoo.com/v8/finance/chart"
+
+    def __init__(self, config: Optional[Dict[str, Any]] = None):
+        settings = config or {}
+        self.timeout = int(settings.get("timeout", 20))
+        self.max_retries = max(0, int(settings.get("max_retries", 2)))
+        self.cache_ttl = max(0, int(settings.get("cache_ttl_seconds", 300)))
+        self.session = requests.Session()
+        self.session.headers.update({"User-Agent": "ISIN-Monitor/1.0"})
+        self._history_cache: Dict[str, Tuple[datetime, pd.DataFrame]] = {}
+
+    def get_history(
+        self,
+        ticker: str,
+        isin: str,
+        daily_range: str = "1y",
+        intraday_range: str = "1mo",
+        intraday_interval: str = "1h",
+    ) -> pd.DataFrame:
+        """Scarica storico giornaliero e intraday, mantenendolo solo in memoria."""
+        cached = self._history_cache.get(ticker)
+        if cached and datetime.now() - cached[0] < timedelta(seconds=self.cache_ttl):
+            return cached[1].copy()
+
+        daily = self._fetch_series(ticker, daily_range, "1d", isin)
+        intraday = self._fetch_series(
+            ticker, intraday_range, intraday_interval, isin
+        )
+        history = pd.concat([daily, intraday], ignore_index=True)
+        history = (
+            history.drop_duplicates(subset=["timestamp"], keep="last")
+            .sort_values("timestamp")
+            .reset_index(drop=True)
+        )
+        if history.empty:
+            raise ValueError(f"Nessun dato storico restituito da Yahoo per {ticker}")
+
+        self._history_cache[ticker] = (datetime.now(), history)
+        return history.copy()
+
+    def get_price(
+        self, ticker: str, isin: str
+    ) -> Tuple[Optional[float], Optional[datetime]]:
+        """Restituisce l'ultima chiusura disponibile come fallback realtime."""
+        history = self._fetch_series(ticker, "5d", "1d", isin)
+        if history.empty:
+            return None, None
+        last_row = history.iloc[-1]
+        return float(last_row["price"]), last_row["timestamp"].to_pydatetime()
+
+    def _fetch_series(
+        self, ticker: str, period: str, interval: str, isin: str
+    ) -> pd.DataFrame:
+        params = {
+            "range": period,
+            "interval": interval,
+            "events": "history",
+            "includePrePost": "false",
+            "includeAdjustedClose": "false",
+        }
+        last_error: Optional[Exception] = None
+        for attempt in range(self.max_retries + 1):
+            try:
+                response = self.session.get(
+                    f"{self.URL}/{ticker}", params=params, timeout=self.timeout
+                )
+                if response.status_code == 429 and attempt < self.max_retries:
+                    time.sleep(2 ** attempt)
+                    continue
+                response.raise_for_status()
+                payload = response.json()
+                result = payload.get("chart", {}).get("result")
+                if not result:
+                    error = payload.get("chart", {}).get("error")
+                    raise ValueError(f"Risposta Yahoo vuota: {error}")
+                return self._result_to_frame(result[0], ticker, isin)
+            except (requests.RequestException, ValueError, KeyError, TypeError) as error:
+                last_error = error
+                if attempt < self.max_retries:
+                    time.sleep(2 ** attempt)
+                    continue
+                break
+
+        raise RuntimeError(
+            f"Impossibile scaricare lo storico Yahoo per {ticker}: {last_error}"
+        )
+
+    @staticmethod
+    def _result_to_frame(
+        result: Dict[str, Any], ticker: str, isin: str
+    ) -> pd.DataFrame:
+        timestamps = result.get("timestamp", [])
+        quote = result.get("indicators", {}).get("quote", [{}])[0]
+        history = pd.DataFrame(
+            {
+                "timestamp": pd.to_datetime(timestamps, unit="s", utc=True)
+                .tz_convert("Europe/Rome")
+                .tz_localize(None),
+                "price": quote.get("close", []),
+            }
+        ).dropna(subset=["timestamp", "price"])
+        history["ticker"] = ticker
+        history["isin"] = isin
+        history["price"] = pd.to_numeric(history["price"], errors="coerce")
+        history = history.dropna(subset=["price"])
+        if (history["price"] <= 0).any():
+            raise ValueError(f"Prezzi Yahoo non validi per {ticker}")
+        return history.sort_values("timestamp").reset_index(drop=True)
+
 
 @profile()
 

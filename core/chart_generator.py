@@ -7,19 +7,23 @@ from datetime import datetime, timedelta
 from typing import Dict, Optional, List
 import io
 import pandas as pd
-import matplotlib.pyplot as plt
-import matplotlib.dates as mdates
-from matplotlib.ticker import FuncFormatter
 import matplotlib
 from .utils import NumberFormatter
 from .profiler import profile, profile_detailed
 matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+import matplotlib.dates as mdates
+from matplotlib.ticker import FuncFormatter
 
 
 class ChartGenerator:
     
     @profile()    
-    def __init__(self, price_history_df: pd.DataFrame):
+    def __init__(
+        self,
+        price_history_df: pd.DataFrame,
+        comparison_days: Optional[List[int]] = None,
+    ):
         """
         Inizializza il generatore di grafici.
 
@@ -27,6 +31,11 @@ class ChartGenerator:
             price_history_df: DataFrame con storico prezzi (timestamp, ticker, price, isin)
         """
         self.price_history_df = price_history_df
+        configured_days = comparison_days or [7, 30, 90]
+        self.comparison_days = sorted(
+            {int(days) for days in configured_days if int(days) > 1},
+            reverse=True,
+        )
         
         plt.style.use('default')
         
@@ -42,6 +51,43 @@ class ChartGenerator:
         self.figure_fontsize = 20   # Titolo principale figura
         self.text_fontsize = 16     # Testo all'interno dei grafici
         self.table_fontsize = 14    # Testo tabella
+
+    def append_price(self, ticker: str, isin: str, timestamp: datetime,
+                     price: float) -> None:
+        """Aggiunge un punto al grafico senza ricostruire tutto lo storico."""
+        self.price_history_df.loc[len(self.price_history_df)] = {
+            'timestamp': timestamp,
+            'ticker': ticker,
+            'price': price,
+            'isin': isin,
+        }
+
+    def replace_ticker_history(self, ticker: str, history: pd.DataFrame) -> None:
+        """Sostituisce lo storico di un ticker con dati provenienti da un provider."""
+        required_columns = ['timestamp', 'ticker', 'price', 'isin']
+        if not set(required_columns).issubset(history.columns):
+            missing = set(required_columns).difference(history.columns)
+            raise ValueError(f"Storico grafico incompleto, colonne mancanti: {missing}")
+
+        remaining = self.price_history_df[
+            self.price_history_df['ticker'] != ticker
+        ]
+        self.price_history_df = pd.concat(
+            [remaining, history[list(required_columns)]],
+            ignore_index=True,
+        )
+
+    @staticmethod
+    def _downsample(data: pd.DataFrame, max_points: int = 450) -> pd.DataFrame:
+        """Riduce i punti visualizzati preservando l'ordine temporale."""
+        if len(data) <= max_points:
+            return data
+        last_index = len(data) - 1
+        indices = [
+            round(index * last_index / (max_points - 1))
+            for index in range(max_points)
+        ]
+        return data.iloc[indices]
 
     @profile_detailed
     def create_comprehensive_chart(self, isin_data: Dict, current_price: float, 
@@ -72,30 +118,46 @@ class ChartGenerator:
         title = f'{company_name} - €{NumberFormatter.format_number(current_price)} - {timestamp_str}'
         
         # OPTIMIZATION: Create figure with optimized parameters
-        fig = plt.figure(figsize=(10, 8))
-        gs = fig.add_gridspec(2, 2, height_ratios=[1, 1], wspace=0.05, hspace=0.15)
-        plt.subplots_adjust(top=0.875, bottom=0.02)
+        # Layout: prima riga con 3 colonne (90d, 30d, 7d), seconda riga con 2 colonne (intraday, summary)
+        fig = plt.figure(figsize=(12.5, 6.6), facecolor='#f4f6f8')
+        outer_gs = fig.add_gridspec(
+            2, 1, height_ratios=[1.08, 0.92], hspace=0.1
+        )
+        fig.subplots_adjust(top=0.93, bottom=0.045, left=0.06, right=0.96)
 
-        # OPTIMIZATION: Create all subplots at once to avoid repeated calls
-        ax1 = fig.add_subplot(gs[0, 0])
-        ax2 = fig.add_subplot(gs[0, 1])
-        ax3 = fig.add_subplot(gs[1, 0])
-        ax4 = fig.add_subplot(gs[1, 1])
+        top_gs = outer_gs[0].subgridspec(1, 3, wspace=0.05)
+        bot_gs = outer_gs[1].subgridspec(1, 2, wspace=0.08)
 
-        # OPTIMIZATION: Plot in parallel data preparation where possible
-        self._plot_timeframe_with_potential_breaks(ax1, ticker_data, 30, current_price, yaxis_side='left', gs_position=gs[0, 0], figure=fig)
-        self._plot_timeframe_with_potential_breaks(ax2, ticker_data, 7, current_price, yaxis_side='right', gs_position=gs[0, 1], figure=fig)
+        axes_top = [
+            fig.add_subplot(top_gs[0, index])
+            for index in range(3)
+        ]
+        ax3 = fig.add_subplot(bot_gs[0, 0])
+        ax4 = fig.add_subplot(bot_gs[0, 1])
+        axes = [*axes_top, ax3, ax4]
+        for axis in axes:
+            axis.set_facecolor('white')
+            for spine in axis.spines.values():
+                spine.set_color('#d9dee3')
+
+        chart_days = self._chart_timeframes()
+        for index, (axis, days) in enumerate(zip(axes_top, chart_days)):
+            self._plot_timeframe_with_potential_breaks(
+                axis, ticker_data, days, current_price,
+                yaxis_side='right' if index == 2 else 'left',
+            )
+            axis.tick_params(axis='x', pad=2)
         self._plot_intraday_data(ax3, ticker_data, "Oggi", current_price, yaxis_side='left')
         self._create_summary_table(ax4, table_data=table_data)
         
         # Set title once at the end
-        fig.suptitle(title, fontsize=self.figure_fontsize, fontweight='bold', y=0.92, color=title_color)
+        fig.suptitle(title, fontsize=18, fontweight='bold', y=0.965, color=title_color)
 
         # OPTIMIZATION: Use more efficient PNG compression
         img_buffer = io.BytesIO()
-        plt.savefig(img_buffer, format='png', dpi=300,  # Reduced DPI for faster performance
-                   bbox_inches='tight', facecolor='white', edgecolor='none',
-                   pil_kwargs={'compress_level': 6})  # PNG optimization
+        fig.savefig(img_buffer, format='png', dpi=100,
+                    facecolor='white', edgecolor='none',
+                    pil_kwargs={'compress_level': 6})
         img_buffer.seek(0)
         
         chart_data = img_buffer.getvalue()
@@ -103,6 +165,12 @@ class ChartGenerator:
         plt.close(fig)  # Explicitly close figure
         
         return chart_data
+
+    def _chart_timeframes(self) -> List[int]:
+        """Selects the three configured historical windows shown in the chart."""
+        defaults = [90, 30, 7]
+        configured = self.comparison_days or defaults
+        return (configured + defaults)[:3]
     
     @profile_detailed    
     def _plot_timeframe_data(self, ax, ticker_data: pd.DataFrame, days: int, current_price: float, yaxis_side: str = 'left'):
@@ -130,44 +198,39 @@ class ChartGenerator:
             })
             period_data = pd.concat([period_data, current_point], ignore_index=True)
 
-        ax.plot(period_data[time_column], period_data['price'], 'b-', linewidth=2, alpha=0.8, label=title)
-        ax.scatter(period_data[time_column], period_data['price'], color='blue', s=20, alpha=0.6)
+        plot_data = self._downsample(period_data)
+        x_values, tick_positions, tick_labels = self._compressed_session_axis(
+            plot_data, time_column
+        )
+        line_x, line_y = self._break_daily_connections(
+            x_values, plot_data[time_column], plot_data['price']
+        )
+        ax.plot(line_x, line_y, color='#1769aa',
+                linewidth=1.8, alpha=0.9, label=title)
+        ax.scatter(x_values, plot_data['price'],
+                   color='#1769aa', s=14, alpha=0.45)
 
-        ax.scatter([period_data[time_column].iloc[-1]], [period_data['price'].iloc[-1]], 
+        ax.scatter([x_values[-1]], [plot_data['price'].iloc[-1]],
                   color='red', s=60, zorder=5, edgecolor='darkred', linewidth=2)
 
         ax.axhline(y=current_price, color='grey', linestyle='--', alpha=0.7, linewidth=1.5)
 
-        ax.grid(True, alpha=0.3, which='major', axis='both')
-        ax.legend()
+        ax.grid(True, alpha=0.25, which='major', axis='both')
+        ax.legend(frameon=False, loc='best')
         
         # **NUOVO: Aggiungi separatori tra giorni**
         # self._add_day_separators(ax, period_data, time_column)
         
-        if days <= 1:
-            ax.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M'))
-        elif days <= 7:
-            ax.xaxis.set_major_formatter(mdates.DateFormatter('%d/%m'))
-        else:
-            ax.xaxis.set_major_formatter(mdates.DateFormatter('%d/%m'))
-        
-        last_time = period_data[time_column].iloc[-1]
-        current_ticks = ax.get_xticks()
-        
-        if last_time not in current_ticks:
-            new_ticks = list(current_ticks) + [mdates.date2num(last_time)]
-            new_labels = [mdates.num2date(t).strftime('%H:%M' if days <= 1 else '%d/%m') for t in new_ticks]
-            ax.set_xticks(new_ticks)
-            ax.set_xticklabels(new_labels)
-
-        ax.set_xlim(period_data[time_column].min(), period_data[time_column].max())
+        ax.set_xticks(tick_positions)
+        ax.set_xticklabels(tick_labels)
+        ax.set_xlim(x_values[0], x_values[-1])
 
         if yaxis_side == 'right':
             ax.yaxis.tick_right()
             ax.yaxis.set_label_position('right')
 
-        plt.setp(ax.yaxis.get_majorticklabels(), rotation=45 if yaxis_side == 'left' else -45)
-        plt.setp(ax.xaxis.get_majorticklabels(), rotation=45)
+        plt.setp(ax.yaxis.get_majorticklabels(), rotation=0, fontsize=9)
+        plt.setp(ax.xaxis.get_majorticklabels(), rotation=0, fontsize=9)
         
         # Tick verso l'interno per entrambi gli assi
         ax.tick_params(axis='both', direction='in')
@@ -176,6 +239,55 @@ class ChartGenerator:
         def price_formatter(x, _):
             return f'€{NumberFormatter.format_number(x)}'
         ax.yaxis.set_major_formatter(FuncFormatter(price_formatter))
+
+    @staticmethod
+    def _break_daily_connections(
+        x_values: list[float],
+        timestamps: pd.Series,
+        prices: pd.Series,
+    ) -> tuple[list[float], list[float]]:
+        """Inserts gaps in the line between separate trading sessions."""
+        dates = pd.Series(pd.to_datetime(timestamps)).dt.date.tolist()
+        line_x: list[float] = []
+        line_y: list[float] = []
+        for index, (x_value, price) in enumerate(zip(x_values, prices)):
+            if index and dates[index] != dates[index - 1]:
+                line_x.append(float('nan'))
+                line_y.append(float('nan'))
+            line_x.append(x_value)
+            line_y.append(float(price))
+        return line_x, line_y
+
+    @staticmethod
+    def _compressed_session_axis(
+        data: pd.DataFrame, time_column: str
+    ) -> tuple[list[float], list[float], list[str]]:
+        """Maps trading sessions to contiguous X coordinates, omitting weekends."""
+        timestamps = pd.to_datetime(data[time_column])
+        session_dates = timestamps.dt.normalize()
+        unique_dates = sorted(session_dates.unique())
+        date_positions = {date: index for index, date in enumerate(unique_dates)}
+        x_values = []
+
+        for timestamp, session_date in zip(timestamps, session_dates):
+            day_data = timestamps[session_dates == session_date]
+            day_start = day_data.min()
+            day_end = day_data.max()
+            duration = (day_end - day_start).total_seconds()
+            fraction = (
+                (timestamp - day_start).total_seconds() / duration
+                if duration > 0 else 0
+            )
+            x_values.append(date_positions[session_date] + fraction * 0.8)
+
+        tick_positions = []
+        tick_labels = []
+        step = 5
+        for index, date in enumerate(unique_dates):
+            if index % step == 0 or index == len(unique_dates) - 1:
+                tick_positions.append(index)
+                tick_labels.append(pd.Timestamp(date).strftime('%d/%m'))
+        return x_values, tick_positions, tick_labels
         
     @profile()        
     def _plot_intraday_data(self, ax, ticker_data: pd.DataFrame, title: str, current_price: float, yaxis_side: str = 'left'):
@@ -199,11 +311,16 @@ class ChartGenerator:
         today_data = pd.concat([today_data, current_point], ignore_index=True)
         
         opening_price = today_data['price'].iloc[0]
-        price_changes = ((today_data['price'] - opening_price) / opening_price * 100)
-        
-        colors = ['green' if pc >= 0 else 'red' for pc in price_changes]
-        ax.plot(today_data[time_column], today_data['price'], 'b-', linewidth=2, label=title)
-        ax.scatter(today_data[time_column], today_data['price'], c=colors, s=30, alpha=0.7)
+        plot_data = self._downsample(today_data)
+        plot_changes = (
+            (plot_data['price'] - opening_price) / opening_price * 100
+        )
+        plot_colors = ['green' if change >= 0 else 'red'
+                       for change in plot_changes]
+        ax.plot(plot_data[time_column], plot_data['price'], color='#173fbd',
+                linewidth=2, label=title)
+        ax.scatter(plot_data[time_column], plot_data['price'], c=plot_colors,
+                   s=28, alpha=0.8)
 
         first_timestamp = today_data[time_column].iloc[0]
         last_timestamp = today_data[time_column].iloc[-1]
@@ -216,19 +333,14 @@ class ChartGenerator:
         ax.axhline(y=current_price, color='grey', linestyle='--', alpha=0.7, linewidth=1.5)
 
         ax.grid(True, alpha=0.3, which='major', axis='both')
-        ax.legend()
+        ax.legend(frameon=False, loc='upper left', fontsize=9)
 
-        ax.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M'))
-        
-        current_ticks = ax.get_xticks()
-        
-        if last_timestamp not in current_ticks:
-            new_ticks = list(current_ticks) + [mdates.date2num(last_timestamp)]
-            new_labels = [mdates.num2date(t).strftime('%H:%M') for t in new_ticks]
-            ax.set_xticks(new_ticks)
-            ax.set_xticklabels(new_labels)
-        
-        plt.setp(ax.xaxis.get_majorticklabels(), rotation=45)
+        locator = mdates.AutoDateLocator(minticks=3, maxticks=6)
+        ax.xaxis.set_major_locator(locator)
+        ax.xaxis.set_major_formatter(
+            mdates.ConciseDateFormatter(locator, show_offset=False)
+        )
+        plt.setp(ax.xaxis.get_majorticklabels(), rotation=0, fontsize=9)
 
 
         today_date = first_timestamp.date()
@@ -244,7 +356,10 @@ class ChartGenerator:
         # Tick verso l'interno per entrambi gli assi
         ax.tick_params(axis='both', direction='in')
 
-        ax.yaxis.set_major_formatter(FuncFormatter(lambda x, _: f'€{NumberFormatter.format_number(x)}'))
+        ax.yaxis.set_major_formatter(
+            FuncFormatter(lambda x, _: f'€{NumberFormatter.format_number(x)}')
+        )
+        plt.setp(ax.yaxis.get_majorticklabels(), rotation=0, fontsize=9)
 
     @profile()
     def _add_day_separators(self, ax, data: pd.DataFrame, time_column: str = 'timestamp'):
@@ -278,11 +393,14 @@ class ChartGenerator:
             current_date = dt_date
 
     @profile()
-    def _plot_timeframe_with_potential_breaks(self, ax, ticker_data: pd.DataFrame, days: int, current_price: float, yaxis_side: str = 'left', gs_position=None, figure=None):
+    def _plot_timeframe_with_potential_breaks(
+        self, ax, ticker_data: pd.DataFrame, days: int, current_price: float,
+        yaxis_side: str = 'left'
+    ):
         """
         Plotta i dati per un timeframe, decidendo se usare assi spezzati per nascondere le ore notturne.
         """
-        cutoff_date = datetime.now() - timedelta(days=days)
+        cutoff_date = datetime.now() - timedelta(days=days+1)
         period_data = ticker_data[ticker_data['timestamp'] >= cutoff_date].copy()
         
         title = f"Ultimi {days} giorni"
@@ -292,17 +410,9 @@ class ChartGenerator:
             ax.set_title(title, fontweight='bold')
             return
         
-        time_column = 'update_timestamp' if 'update_timestamp' in period_data.columns else 'timestamp'
-        
-        # Controlla se ci sono più giorni di trading che giustifichino broken axis
-        data_dt = pd.to_datetime(period_data[time_column])
-        unique_dates = data_dt.dt.date.unique()
-        
-                # Broken axis per timeframe multi-giorno
-        if len(unique_dates) > 2 and days > 1:
-            self._create_broken_timeframe_plot(ax, period_data, time_column, title, current_price, yaxis_side, gs_position, figure)
-        else:  # Un solo giorno o pochi dati, plot normale
-            self._plot_timeframe_data(ax, ticker_data, days, current_price, yaxis_side)
+        # Use a single axis for every timeframe: it keeps dates readable and
+        # avoids clipped labels caused by dynamically-created broken axes.
+        self._plot_timeframe_data(ax, ticker_data, days, current_price, yaxis_side)
 
     @profile_detailed
     def _create_broken_timeframe_plot(self, original_ax, period_data: pd.DataFrame, time_column: str, title: str, current_price: float, yaxis_side: str, gs_position, figure):
@@ -335,7 +445,6 @@ class ChartGenerator:
                             'date': date,
                             'times': day_times[market_mask]
                         })
-            
             if len(daily_segments) <= 1:
                 # Fallback al plot normale se non ci sono abbastanza segmenti
                 original_ax.set_visible(True)
@@ -398,13 +507,15 @@ class ChartGenerator:
                 
                 # Solo l'ultimo segmento ha il label per la legenda (dove sarà mostrata)
                 label = title if i == len(daily_segments) - 1 else None
-                ax.plot(seg_times, seg_data['price'], 'b-', linewidth=2, alpha=0.8, label=label)
-                ax.scatter(seg_times, seg_data['price'], color='blue', s=20, alpha=0.6)
+                seg_plot = self._downsample(seg_data)
+                ax.plot(seg_plot[time_column], seg_plot['price'], color='#1769aa',
+                        linewidth=1, alpha=0.9, label=label)
+                # ax.scatter(seg_times, seg_data['price'], color='blue', s=3, alpha=0.6)
                 
                 # Evidenzia ultimo punto se è l'ultimo segmento
                 if i == len(daily_segments) - 1:
                     ax.scatter([seg_times.iloc[-1]], [seg_data['price'].iloc[-1]], 
-                              color='red', s=60, zorder=5, edgecolor='darkred', linewidth=2)
+                              color='red', s=20, zorder=5, edgecolor='darkred', linewidth=2)
                     # Aggiungi legenda all'ultimo subplot (ultimo giorno)
                     ax.legend(loc='upper right', fontsize=8)
                 
@@ -417,36 +528,52 @@ class ChartGenerator:
                 # Aggiorna posizione per il prossimo segmento
                 current_left += segment_width + gap_width
                 
-                # Formattazione asse X - mostra solo orari di mercato
-                ax.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M'))
-                ax.xaxis.set_major_locator(mdates.HourLocator(interval=2))
-                plt.setp(ax.xaxis.get_majorticklabels(), rotation=45, fontsize=10)
+                # Formattazione asse X solo se il numero di segmenti è <= 7
+                # (per evitare problemi di memoria con tanti tick)
+                ax.set_xticks([])
+                if len(daily_segments) <= 7 and i < len(daily_segments) - 1:
+                    ax.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M'))
+                    ax.xaxis.set_major_locator(mdates.HourLocator(interval=2))
+                    plt.setp(ax.xaxis.get_majorticklabels(), rotation=45, fontsize=10)
+                elif i == len(daily_segments) - 1:
+                    ax.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M'))
+                    plt.setp(ax.xaxis.get_majorticklabels(), rotation=45, fontsize=10)
                 
                 # Tick verso l'interno per entrambi gli assi
                 ax.tick_params(axis='both', direction='in')
                 
                 # Gestione asse Y
-                if i == 0:  # Primo segmento - mostra Y a sinistra
+                if i == 0:  # Primo segmento - mostra Y a sinistra (o a destra se richiesto)
                     if yaxis_side == 'left':
                         ax.yaxis.set_major_formatter(FuncFormatter(lambda x, _: f'€{NumberFormatter.format_number(x)}'))
                         plt.setp(ax.yaxis.get_majorticklabels(), rotation=45)
+                        ax.yaxis.set_tick_params(labelleft=True, labelright=False)
                     else:
                         ax.yaxis.set_visible(True)
                         ax.yaxis.tick_right()
-                        # ax.yaxis.set_label_position('right')
+                        ax.yaxis.set_label_position('right')
+                        ax.yaxis.set_major_formatter(FuncFormatter(lambda x, _: f'€{NumberFormatter.format_number(x)}'))
+                        plt.setp(ax.yaxis.get_majorticklabels(), rotation=-45)
+                        ax.yaxis.set_tick_params(labelright=True, labelleft=False)
                 elif i == len(daily_segments) - 1:  # Ultimo segmento - mostra Y a destra se richiesto
                     if yaxis_side == 'right':
                         ax.yaxis.tick_right()
                         ax.yaxis.set_label_position('right')
                         ax.yaxis.set_major_formatter(FuncFormatter(lambda x, _: f'€{NumberFormatter.format_number(x)}'))
+                        # ruota le label verso l'interno per gli assi esterni a destra
                         plt.setp(ax.yaxis.get_majorticklabels(), rotation=-45)
+                        ax.yaxis.set_tick_params(labelright=True, labelleft=False)
                     else:
                         ax.yaxis.set_visible(True)
-                else:  # Segmenti intermedi - mostra Y a destra per evitare conflitti
+                        ax.yaxis.set_tick_params(labelleft=True, labelright=False)
+                else:  # Segmenti intermedi - mostra Y internamente (labels dentro al plot) e ruotate -45
                     ax.yaxis.tick_right()
                     ax.yaxis.set_label_position('right')
                     ax.yaxis.set_major_formatter(FuncFormatter(lambda x, _: f'€{NumberFormatter.format_number(x)}'))
-                    plt.setp(ax.yaxis.get_majorticklabels(), rotation=-45)
+                    # Mostra le etichette sul lato destro ma posizionate internamente verso il plot
+                    ax.yaxis.set_tick_params(labelright=True, labelleft=False, pad=-10)
+                    # Rotazione e allineamento per una lettura coerente all'interno
+                    plt.setp(ax.yaxis.get_majorticklabels(), rotation=-45, ha='right')
                 
                 # Nasconde spines tra subplot (pattern dell'esempio) - TEMPORANEAMENTE DISABILITATO
                 if i > 0:
@@ -458,10 +585,13 @@ class ChartGenerator:
                 
                 ax.grid(True, alpha=0.3, which='major', axis='both')  # Grid completa
                 # Aggiungi data come etichetta
-                date_str = segment['date'].strftime('%d/%m')
-                ax.text(0.5, 1.04, date_str, transform=ax.transAxes, 
-                       ha='center', va='top', fontsize=9, fontweight='bold')
-            
+
+                # se il numero di segmenti è piccolo, se il numero è circa 30, mostrale meno frequentemente
+                if len(daily_segments) <= 10 or (len(daily_segments) <= 30 and i % 3 == 0) or (len(daily_segments) > 30 and i % 8 == 0):
+                    date_str = segment['date'].strftime('%d/%m')
+                    ax.text(0.5, 1.04, date_str, transform=ax.transAxes, 
+                        ha='center', va='top', fontsize=9, fontweight='bold', rotation=0)
+                    
             kwargs_top = dict(marker=[(0, -1), (0, 0)], markersize=12,
                           linestyle="none", color='k', mec='k', mew=1, clip_on=False)
             kwargs_bottom = dict(marker=[(0, 1), (0, 0)], markersize=12,
@@ -488,13 +618,17 @@ class ChartGenerator:
     @profile()
     def _plot_single_segment(self, ax, period_data: pd.DataFrame, time_column: str, title: str, current_price: float, yaxis_side: str):
         """Plot normale per un singolo segmento o fallback."""
-        ax.plot(period_data[time_column], period_data['price'], 'b-', linewidth=2, alpha=0.8, label=title)
-        ax.scatter(period_data[time_column], period_data['price'], color='blue', s=20, alpha=0.6)
+        plot_data = self._downsample(period_data)
+        ax.plot(plot_data[time_column], plot_data['price'], color='#1769aa',
+                linewidth=1.8, alpha=0.9, label=title)
+        marker_data = self._downsample(period_data, 80)
+        ax.scatter(marker_data[time_column], marker_data['price'],
+                   color='#1769aa', s=14, alpha=0.45)
         ax.scatter([period_data[time_column].iloc[-1]], [period_data['price'].iloc[-1]], 
                   color='red', s=60, zorder=5, edgecolor='darkred', linewidth=2)
         ax.axhline(y=current_price, color='grey', linestyle='--', alpha=0.7, linewidth=1.5)
-        ax.grid(True, alpha=0.3, which='major', axis='both')
-        ax.legend()
+        ax.grid(True, alpha=0.25, which='major', axis='both')
+        ax.legend(frameon=False, loc='upper left', fontsize=8)
         ax.set_title(title, fontweight='bold')
         
         if yaxis_side == 'right':

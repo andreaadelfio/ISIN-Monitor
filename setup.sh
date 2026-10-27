@@ -32,6 +32,10 @@ elif [[ "$1" == "status" ]]; then
     echo "Status servizio:"
     sudo systemctl status $TIMER_NAME --no-pager -l
     
+elif [[ "$1" == "read_price_raw" ]]; then
+    echo "Lettura storico prezzi:"
+    python3 price_history_reader.py --raw
+
 elif [[ "$1" == "logs" ]]; then
     echo "Log servizio (tempo reale - premi Ctrl+C per uscire):"
     sudo journalctl -u $SERVICE_NAME -f --no-pager
@@ -49,6 +53,7 @@ elif [[ "$1" == "install" ]]; then
     
     # Percorso corrente
     CURRENT_DIR=$(pwd)
+    PYTHON_BIN=$(command -v python3)
     
     echo "Creando file servizio systemd..."
     sudo tee /etc/systemd/system/$SERVICE_NAME.service > /dev/null << EOF
@@ -59,7 +64,7 @@ After=network.target
 [Service]
 Type=oneshot
 WorkingDirectory=$CURRENT_DIR
-ExecStart=/home/andrea-adelfio/anaconda3/envs/rootenv/bin/python monitor.py --monitor
+ExecStart=$PYTHON_BIN monitor.py --monitor
 User=andrea-adelfio
 Group=andrea-adelfio
 
@@ -123,6 +128,7 @@ elif [[ "$1" == "reinstall" ]]; then
     
     # Percorso corrente
     CURRENT_DIR=$(pwd)
+    PYTHON_BIN=$(command -v python3)
     
     echo "Creando file servizio systemd..."
     sudo tee /etc/systemd/system/$SERVICE_NAME.service > /dev/null << EOF
@@ -133,7 +139,7 @@ After=network.target
 [Service]
 Type=oneshot
 WorkingDirectory=$CURRENT_DIR
-ExecStart=/home/andrea-adelfio/anaconda3/envs/rootenv/bin/python monitor.py --monitor
+ExecStart=$PYTHON_BIN monitor.py --monitor
 User=andrea-adelfio
 Group=andrea-adelfio
 
@@ -172,6 +178,7 @@ else
     echo "  ./setup.sh start      # Avvia servizio"
     echo "  ./setup.sh status     # Stato servizio"
     echo "  ./setup.sh logs       # Mostra log"
+    echo "  ./setup.sh read_price_history [opzioni]  # Legge lo storico prezzi"
     echo "  ./setup.sh test       # Test manuale"
     echo "  ./setup.sh install    # Installa servizio systemd"
     echo "  ./setup.sh reinstall  # Reinstalla servizio systemd"
