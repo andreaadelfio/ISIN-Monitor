@@ -28,6 +28,6 @@ def config():
                        'market_open_time': '08:55', 'market_close_time': '18:05',
                        'price_comparison_days': [1, 7, 30, 360],
                        'historical_table_days': [1, 7, 30, 360]},
-        'api': {'request_timeout': 5, 'rate_limit_delay': 0},
+        'api': {'request_timeout': 5},
         'yahoo': {'enabled': True},
     }

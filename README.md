@@ -5,6 +5,17 @@ legge i prezzi su Borsa Italiana, li salva nel database Supabase di MyFinance e 
 avviso su Telegram (grafico, tabella e link alla scheda in MyFinance) quando un prezzo si
 muove almeno della soglia del titolo rispetto al prezzo salvato prima.
 
+In orario di mercato è un processo solo, sempre acceso (lo avvia il timer systemd alle
+08:55 ed esce da solo alle 18:05), con tre attività separate:
+
+- **giri dei prezzi**, ogni 15 secondi esatti (:00, :15, :30, :45): le richieste a Borsa
+  Italiana sono distribuite nei 15 secondi, una ogni 0,7 secondi circa con 17 titoli,
+  perché Borsa Italiana risponde **429** (troppe richieste) alle raffiche. Dopo un 429 il
+  giro si interrompe e il monitor fa una pausa di 60 secondi;
+- **avvisi**: passano da una coda a un thread che disegna il grafico e lo manda su
+  Telegram, così un grafico o un invio lento non fanno saltare i giri;
+- **lavori del mattino** (Yahoo e proposte), in un altro thread al primo giro del giorno.
+
 Ogni mattina, al primo avvio, riempie con Yahoo Finance i buchi dello storico (giorni a
 PC spento) e manda su Telegram i cambiamenti delle proposte di MyFinance.
 
@@ -16,10 +27,14 @@ PC spento) e manda su Telegram i cambiamenti delle proposte di MyFinance.
   (variazione in % fra due prezzi che fa scattare un avviso, di solito 0,5). L'ultima lista
   è salvata anche in `~/.local/state/isin-monitor/titoli.json`: se Supabase non risponde,
   il monitor continua con quella.
-- **Prezzi**: Borsa Italiana, scheda del titolo per ISIN. Un prezzo si salva solo se è
-  cambiato; tutti i prezzi nuovi di un giro vanno nel database con una sola scrittura
+- **Prezzi**: Borsa Italiana, scheda del titolo per ISIN (dopo la prima lettura il monitor
+  ricorda l'indirizzo finale della pagina, così ogni titolo costa una richiesta sola). Un
+  prezzo si salva solo se è cambiato; tutti i prezzi nuovi di un giro vanno nel database
+  con una sola scrittura
   (tabella `prezzi`, fonte `borsa`). Se Supabase non risponde restano in
-  `~/.local/state/isin-monitor/prezzi_in_sospeso.json` e partono al giro dopo.
+  `~/.local/state/isin-monitor/prezzi_in_sospeso.json` e partono al giro dopo. Titoli
+  poco scambiati a Milano (BNP, i titoli americani prima dell'apertura di New York) hanno
+  pochi punti al giorno: il prezzo cambia solo quando c'è un contratto.
 - **Avvisi**: variazione rispetto all'ultimo prezzo salvato ≥ `soglia_avviso` (in su o in
   giù). Non c'è pausa fra un avviso e l'altro: è voluto. L'avviso ha i link a Fineco,
   Borsa Italiana e alla scheda in MyFinance (`<myfinance_url>/?isin=<ISIN>`).
@@ -61,7 +76,9 @@ chiave non va mai in `config.json`, nel repository o nei log.
    La prima volta crea `~/.config/isin-monitor/supabase.env` (permessi 600): scrivici la
    chiave dopo `SUPABASE_SECRET_KEY=` e rilancia `./setup.sh restart`.
 
-Il timer parte solo in orario di mercato, ogni 15 secondi: gli `OnCalendar` sono generati
+Il timer scatta solo in orario di mercato, ogni 15 secondi: se il monitor non sta già
+girando lo avvia (all'apertura, dopo una sospensione del PC o se si è fermato), altrimenti
+non fa niente. Gli `OnCalendar` sono generati
 da `market_open_time`/`market_close_time` di `config.json` (con 08:55-18:05:
 `Mon..Fri 08:55..59:00/15`, `Mon..Fri 09..17:*:00/15`, `Mon..Fri 18:00..05:00/15`). Se
 cambi gli orari, rilancia `./setup.sh install`. Lanciato a mano fuori orario,
@@ -78,7 +95,7 @@ cambi gli orari, rilancia `./setup.sh install`. Lanciato a mano fuori orario,
 ./setup.sh riempi-storico --prova     # quanti punti Yahoo mancano (senza scrivere)
 ./setup.sh riempi-storico             # li scrive
 python3 monitor.py --test-telegram    # messaggio di prova
-python3 monitor.py --monitor --ignora-orario   # un giro completo anche fuori orario
+python3 monitor.py --giro --ignora-orario      # un giro solo, anche fuori orario
 ```
 
 ## Configurazione (`config.json`)
@@ -92,7 +109,7 @@ python3 monitor.py --monitor --ignora-orario   # un giro completo anche fuori or
 | `monitoring.market_open_time`, `market_close_time` | orario (anche del timer systemd) |
 | `monitoring.price_comparison_days` | i tre periodi dei grafici in alto (1 è ignorato) |
 | `monitoring.historical_table_days` | le chiusure nella tabella |
-| `api.request_timeout`, `rate_limit_delay` | timeout delle richieste, pausa fra un titolo e l'altro |
+| `api.request_timeout` | timeout delle richieste |
 | `yahoo.enabled`, `timeout`, `max_retries` | riempimento dei buchi con Yahoo |
 | `supabase.url` | progetto Supabase di MyFinance |
 | `test` | `true`: `--monitor` fa il test del primo titolo |
@@ -150,7 +167,7 @@ Struttura:
 monitor.py            punto d'ingresso (controllo d'orario, poi core/app.py)
 migrazione.py         migrazione una tantum di CSV e storico locale
 setup.sh              servizio e timer systemd
-core/app.py           il giro di controllo, avvisi, lavori del mattino
+core/app.py           i giri ogni 15 secondi, coda degli avvisi, lavori del mattino
 core/database.py      Supabase (watchlist, prezzi, serie_prezzi)
 core/price_providers.py  Borsa Italiana e Yahoo
 core/storico.py       riempimento dei buchi con Yahoo
@@ -171,6 +188,9 @@ tests/                test (pytest)
   partono appena torna. Un `401` vuol dire chiave sbagliata o revocata.
 - **"Nessun prezzo per ..."**: Borsa Italiana non ha la scheda di quell'ISIN (titolo non
   quotato a Milano o ISIN cambiato): correggi l'ISIN dal sito.
+- **"Borsa Italiana: troppe richieste (429)"**: Borsa Italiana limita le richieste; il
+  monitor fa una pausa di 60 secondi e riprende. Non lanciare altri `--giro` o prove mentre
+  il servizio gira: le richieste si sommano.
 - **Nessun avviso**: guarda `./setup.sh logs`; fuori orario il timer non parte;
   `./setup.sh test` prova Telegram con un avviso vero.
 - **Grafici vuoti o con buchi**: `./setup.sh riempi-storico --prova` dice quanti punti

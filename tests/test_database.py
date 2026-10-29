@@ -32,7 +32,7 @@ def db_con(*risposte):
     db = Database('https://progetto.supabase.co', 'sb_secret_finta')
     sessione = SessioneFinta(risposte)
     sessione.headers = db.session.headers
-    db.session = sessione
+    db._locale.session = sessione
     return db, sessione
 
 

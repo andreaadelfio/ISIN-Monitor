@@ -13,6 +13,7 @@ in config.json o nei log.
 """
 
 import os
+import threading
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional
@@ -55,9 +56,17 @@ class Database:
     def __init__(self, url: str, chiave: str, timeout: float = 10):
         self.url = url.rstrip('/') + '/rest/v1'
         self.timeout = timeout
-        self.session = requests.Session()
-        # Con le chiavi sb_secret_ basta l'header apikey (niente Authorization)
-        self.session.headers.update({'apikey': chiave})
+        self._chiave = chiave
+        self._locale = threading.local()
+
+    @property
+    def session(self) -> requests.Session:
+        """Una sessione HTTP per thread: prezzi, avvisi e lavori del mattino girano insieme."""
+        if not hasattr(self._locale, 'session'):
+            self._locale.session = requests.Session()
+            # Con le chiavi sb_secret_ basta l'header apikey (niente Authorization)
+            self._locale.session.headers.update({'apikey': self._chiave})
+        return self._locale.session
 
     @classmethod
     def da_configurazione(cls, config: Dict) -> Optional['Database']:

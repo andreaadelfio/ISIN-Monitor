@@ -14,6 +14,15 @@ import sys
 from datetime import datetime, time
 
 
+# Un giro di controllo ogni INTERVALLO secondi (anche il timer systemd usa questo passo)
+INTERVALLO = 15
+
+
+def secondi_al_prossimo_giro(adesso: datetime) -> float:
+    """Quanto manca al prossimo multiplo di INTERVALLO secondi (es. :00, :15, :30, :45)."""
+    return INTERVALLO - adesso.timestamp() % INTERVALLO
+
+
 def _ora(testo: str) -> time:
     return datetime.strptime(testo, '%H:%M').time()
 
@@ -39,7 +48,7 @@ def descrizione_orario(monitoring: dict) -> str:
     return f"lun-ven {ore}" if monitoring.get('weekdays_only', True) else ore
 
 
-def calendario_timer(monitoring: dict, secondi: int = 15) -> list:
+def calendario_timer(monitoring: dict, secondi: int = INTERVALLO) -> list:
     """Righe OnCalendar del timer: un avvio ogni `secondi` solo nell'orario di mercato.
 
     Con 08:55-18:05 dà Mon..Fri 08:55..59:00/15, Mon..Fri 09..17:*:00/15 e

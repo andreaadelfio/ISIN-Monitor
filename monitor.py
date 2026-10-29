@@ -2,7 +2,8 @@
 """
 ISIN Monitor - prezzi da Borsa Italiana, storico in Supabase (MyFinance), avvisi Telegram.
 
-Il timer systemd lo avvia ogni 15 secondi in orario di mercato con --monitor.
+Il timer systemd lo avvia in orario di mercato con --monitor: resta acceso e fa un
+giro ogni 15 secondi fino alla chiusura (il timer lo riavvia se si ferma).
 Fuori orario esce subito, prima degli import pesanti (pandas, matplotlib).
 """
 
@@ -29,7 +30,9 @@ def carica_config(percorso: str = 'config.json') -> dict:
 def main():
     parser = argparse.ArgumentParser(description='ISIN Monitor - Monitoraggio prezzi e notifiche')
     parser.add_argument('--monitor', action='store_true',
-                        help='Un controllo di tutti i titoli (lo usa il timer systemd)')
+                        help='Un giro ogni 15 secondi fino alla chiusura (lo usa systemd)')
+    parser.add_argument('--giro', action='store_true',
+                        help='Un giro solo su tutti i titoli, avvisi compresi (per le prove)')
     parser.add_argument('--check-once', action='store_true',
                         help='Test: controlla il primo titolo con soglia 0 (manda sempre l\'avviso)')
     parser.add_argument('--test-telegram', action='store_true',
@@ -50,7 +53,9 @@ def main():
 
     config = carica_config()
     builtins.ENABLE_PROFILING = args.with_profiling
-    controllo = args.monitor or args.check_once
+    # Nel journal di systemd ogni riga subito, non a blocchi
+    sys.stdout.reconfigure(line_buffering=True)
+    controllo = args.monitor or args.giro or args.check_once
 
     if controllo:
         adesso = datetime.now()
@@ -74,9 +79,10 @@ def main():
         monitor.riempi_storico(scrivi=not args.prova)
     elif args.check_once or config.get('test'):
         monitor.run_test()
-    else:
+    elif args.giro:
         monitor.controlla_tutti()
-        print(f"✅ [{datetime.now():%H:%M:%S}] Controllo completato")
+    else:
+        monitor.monitora(ignora_orario=args.ignora_orario)
 
     if args.with_profiling:
         from core.profiling_analysis import main as profile_analyser_main

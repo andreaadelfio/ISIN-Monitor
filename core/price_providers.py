@@ -20,6 +20,10 @@ class BorsaItalianaProvider:
         self.timeout = timeout
         # Sessione condivisa: riusa la connessione HTTPS tra un titolo e l'altro
         self.session = requests.Session()
+        # La pagina finale di ogni ISIN (es. .../US4581401001-BGEM.html), per saltare il redirect
+        self._url_finale: Dict[str, str] = {}
+        # True dopo una risposta 429: Borsa Italiana chiede di rallentare
+        self.troppe_richieste = False
 
     @profile()
     def get_price(self, isin: str) -> Tuple[Optional[float], Optional[str]]:
@@ -34,6 +38,9 @@ class BorsaItalianaProvider:
             ("italiano", f"https://www.borsaitaliana.it/borsa/azioni/scheda/{isin}.html"),
             ("globale", f"https://www.borsaitaliana.it/borsa/azioni/global-equity-market/scheda/{isin}.html")
         ]
+        if isin in self._url_finale:
+            markets.insert(0, ("ultima pagina", self._url_finale[isin]))
+        errori = []
         
         headers = {
             'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36'
@@ -42,6 +49,9 @@ class BorsaItalianaProvider:
         for market_type, url in markets:
             try:
                 response = self.session.get(url, headers=headers, timeout=self.timeout)
+                if response.status_code == 429:
+                    self.troppe_richieste = True
+                    return None, None, None
                 if response.status_code == 200:
                     html_content = response.text
                     
@@ -50,21 +60,17 @@ class BorsaItalianaProvider:
                     company_name = self._extract_company_name_from_html(html_content)
                     
                     if price is not None:
-                        market_timestamp = datetime.now()
-                        print(f"✅ Prezzo trovato: €{price:.4f}")
-                        if company_name:
-                            print(f"✅ Nome azienda: {company_name}")
-                        return price, company_name, market_timestamp
-                    else:
-                        print(f"❌ Prezzo non estratto da {market_type}")
+                        self._url_finale[isin] = response.url
+                        return price, company_name, datetime.now()
+                    errori.append(f"{market_type}: prezzo non trovato")
                 else:
-                    print(f"❌ Status {response.status_code} per {market_type}")
+                    errori.append(f"{market_type}: status {response.status_code}")
                     
             except Exception as e:
-                print(f"❌ Errore per {market_type}: {e}")
+                errori.append(f"{market_type}: {e.__class__.__name__}")
                 continue
         
-        print(f"❌ Nessun dato trovato per ISIN {isin}")
+        print(f"❌ Nessun prezzo per ISIN {isin} ({'; '.join(errori)})")
         return None, None, None
 
     def _extract_price_from_html(self, html_content):

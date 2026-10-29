@@ -35,3 +35,9 @@ def test_calendario_timer():
     assert calendario_timer({**ORARIO, 'market_open_time': '09:00', 'market_close_time': '09:30',
                               'weekdays_only': False}) == ['*-*-* 09:00..30:00/15']
     assert calendario_timer({'market_hours_only': False}) == ['*:*:00/15']
+
+
+def test_prossimo_giro_ai_multipli_di_15_secondi():
+    from core.orario import secondi_al_prossimo_giro
+    assert secondi_al_prossimo_giro(datetime(2026, 10, 29, 10, 0, 7)) == 8
+    assert secondi_al_prossimo_giro(datetime(2026, 10, 29, 10, 0, 15)) == 15

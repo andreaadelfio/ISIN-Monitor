@@ -26,8 +26,7 @@
     ]
   },
   "api": {
-    "request_timeout": 10,
-    "rate_limit_delay": 2
+    "request_timeout": 10
   },
   "yahoo": {
     "enabled": true,

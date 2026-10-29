@@ -54,10 +54,13 @@ Description=ISIN Monitor Service
 After=network.target
 
 [Service]
-Type=oneshot
+# Resta acceso in orario di mercato (un giro ogni 15 secondi) ed esce alla chiusura
+Type=simple
 WorkingDirectory=$CARTELLA
 EnvironmentFile=$ENV_FILE
 ExecStart=$PYTHON_BIN monitor.py --monitor
+Restart=on-failure
+RestartSec=15
 User=$UTENTE
 Group=$(id -gn "$UTENTE")
 
@@ -68,10 +71,11 @@ EOF
     echo "Creando file timer systemd..."
     sudo tee /etc/systemd/system/$TIMER_NAME > /dev/null << EOF
 [Unit]
-Description=ISIN Monitor Timer - ogni 15 secondi in orario di mercato
-Requires=$SERVICE_NAME.service
+Description=ISIN Monitor Timer - avvia il monitor in orario di mercato
 
 [Timer]
+# Ogni 15 secondi in orario: avvia il monitor se non sta già girando (all'apertura,
+# dopo una sospensione del PC o se si è fermato); se gira già non fa niente
 $CALENDARIO
 # Senza, systemd può ritardare gli avvii fino a un minuto
 AccuracySec=1s
@@ -85,6 +89,8 @@ EOF
     echo "Abilitando e avviando il timer..."
     sudo systemctl enable $TIMER_NAME
     sudo systemctl restart $TIMER_NAME
+    # Se il monitor sta girando, riparte con il codice nuovo
+    sudo systemctl try-restart $SERVICE_NAME
     echo "Installazione completata! Status:"
     sudo systemctl status $TIMER_NAME --no-pager -l
 }
@@ -101,19 +107,20 @@ disinstalla() {
 
 case "$1" in
     restart|"")
-        echo "Riavviando il timer..."
+        echo "Riavviando timer e monitor..."
         sudo systemctl daemon-reload
         sudo systemctl restart $TIMER_NAME
+        sudo systemctl try-restart $SERVICE_NAME
         sudo systemctl status $TIMER_NAME --no-pager -l
         ;;
     stop)
-        sudo systemctl stop $TIMER_NAME
+        sudo systemctl stop $TIMER_NAME $SERVICE_NAME
         ;;
     start)
         sudo systemctl start $TIMER_NAME
         ;;
     status)
-        sudo systemctl status $TIMER_NAME --no-pager -l
+        sudo systemctl status $TIMER_NAME $SERVICE_NAME --no-pager -l
         systemctl list-timers $TIMER_NAME --no-pager
         ;;
     logs)
@@ -151,7 +158,7 @@ case "$1" in
         echo "Comandi disponibili:"
         echo "  ./setup.sh install            # Installa (o aggiorna) servizio e timer systemd"
         echo "  ./setup.sh restart            # Riavvia il timer (default)"
-        echo "  ./setup.sh stop | start       # Ferma / avvia il timer"
+        echo "  ./setup.sh stop | start       # Ferma timer e monitor / riavvia il timer"
         echo "  ./setup.sh status             # Stato del timer e prossimi avvii"
         echo "  ./setup.sh logs               # Log in tempo reale"
         echo "  ./setup.sh test               # Test manuale con avviso Telegram"
