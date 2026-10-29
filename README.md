@@ -46,9 +46,9 @@ PC spento) e manda su Telegram i cambiamenti delle proposte di MyFinance.
   (prezzi in centesimi, variazioni fino alla prima cifra decimale significativa). Il punto
   rosso è il prezzo attuale. Ogni periodo ha il suo colore anche dentro i pannelli più
   lunghi (blu 360 giorni, verde acqua 30, arancio 7, viola oggi) e la legenda di ogni
-  pannello ne dà la variazione. Nel pannello annuale anche le medie mobili a 50 e 200
-  sedute (dove lo storico basta) e le righe del massimo e del minimo. In alto a destra il
-  segnale e il punteggio dell'analisi di MyFinance, coi colori del sito.
+  pannello ne dà la variazione. Nel pannello annuale anche le righe del massimo e del
+  minimo. In alto a destra il segnale e il punteggio dell'analisi di MyFinance (che usa le
+  medie mobili a 50 e 200 giorni per il trend), coi colori del sito.
 - **Le tue posizioni**: dal registro `investimenti` di MyFinance. Se hai il titolo, una riga
   punteggiata scura segna il prezzo di carico (calcolato come nel sito: ABP del conto, o
   costo diviso quote), la tabella ha la riga "Carico" e il messaggio il guadagno o la

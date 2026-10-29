@@ -6,7 +6,7 @@ from core.app import chiusure_storiche
 import matplotlib.pyplot as plt
 
 from core.chart_generator import (COLORI_PERIODI, SEDUTA, ChartGenerator, asse_sedute, colore_di,
-                                  dati_oggi, dati_pannello, in_orario, medie_mobili, periodi,
+                                  dati_oggi, dati_pannello, in_orario, periodi,
                                   prima_cifra, tabella_prezzi, etichetta_segnale)
 
 ADESSO = datetime(2026, 10, 27, 15, 0)
@@ -73,7 +73,7 @@ BLU, ACQUA, ARANCIO, VIOLA = COLORI_PERIODI
 
 
 def linee(asse):
-    """(colore, prezzi) delle linee dei periodi (senza prezzo attuale, massimo, minimo, medie)."""
+    """(colore, prezzi) delle linee dei periodi (senza prezzo attuale, massimo e minimo)."""
     return [(linea.get_color(), list(linea.get_ydata())) for linea in asse.get_lines()
             if linea.get_color() in COLORI_PERIODI]
 
@@ -171,19 +171,15 @@ def test_segnale_di_myfinance():
     assert etichetta_segnale(None, 50) is None
 
 
-def test_annuale_con_medie_massimo_e_minimo():
+def test_annuale_con_massimo_e_minimo():
     giornaliero = tabella(*[(f'2026-0{1 + i // 28}-{1 + i % 28:02d}', i + 1) for i in range(60)])
-    medie = medie_mobili(giornaliero, sedute=(5, 100))
-    assert medie[5].iloc[4] == 3.0 and medie[5].isna().sum() == 4   # media di 1..5
-    assert medie[100].isna().all()                                    # troppe poche sedute
-
     fig, asse = plt.subplots()
     ChartGenerator()._plot_giornaliero(asse, giornaliero, 360, 50.0, periodi([7, 30, 360], ADESSO),
-                                       medie=medie_mobili(giornaliero), estremi=[60.0, 1.0])
+                                       estremi=[60.0, 1.0])
     voci = legenda(asse)
     righe = [list(linea.get_ydata()) for linea in asse.get_lines() if linea.get_color() == '#9a9a9a']
     plt.close(fig)
-    assert voci == ['Ultimi 360 giorni', 'Media 50g', 'Max e min']   # la media a 200 non c'è ancora
+    assert voci == ['Ultimi 360 giorni', 'Max e min']
     assert righe == [[60.0, 60.0], [1.0, 1.0]]
 
 

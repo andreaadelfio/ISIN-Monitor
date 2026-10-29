@@ -10,7 +10,7 @@ I dati arrivano solo dalla tabella prezzi di Supabase (vedi ISINMonitor.dati_gra
 Pannelli: in alto 360, 30 e 7 giorni, in basso Oggi e la tabella riassuntiva.
 Ogni periodo ha un colore (blu 360 giorni, verde acqua 30, arancio 7, viola oggi) che
 resta lo stesso anche dentro i pannelli più lunghi; la legenda dà la variazione del periodo.
-Nel pannello annuale anche le medie mobili a 50 e 200 sedute e il massimo e il minimo.
+Nel pannello annuale anche le righe del massimo e del minimo.
 In alto a destra il segnale dell'analisi di MyFinance. Se hai il titolo in portafoglio, una
 riga punteggiata scura segna il prezzo di carico e dei triangoli i tuoi acquisti e vendite.
 """
@@ -41,9 +41,6 @@ COLORI_PERIODI = ['#2a78d6', '#1baf7a', '#eb6834', '#6250d6']
 # Le tue posizioni (carico, acquisti e vendite): scuro, per non confondersi coi periodi
 SCURO = '#2b2b2b'
 GRIGIO_RIGHE = '#9a9a9a'
-# Medie mobili del pannello annuale (sedute), in grigi chiaro e scuro
-MEDIE = (50, 200)
-COLORI_MEDIE = ('#a3a3a3', '#5c5c5c')
 # Il segnale come nei badge del sito di MyFinance: (fondo, testo)
 COLORI_SEGNALI = {
     'compra': ('#3f6d56', '#ffffff'),
@@ -65,15 +62,6 @@ def etichetta_segnale(segnale: Optional[str], punteggio: Optional[int]) -> Optio
     if segnale not in ETICHETTE:
         return None
     return f'MyFinance: {ETICHETTE[segnale]}' + (f' · {punteggio}/100' if punteggio is not None else '')
-
-
-def medie_mobili(giornaliero: pd.DataFrame, sedute=MEDIE) -> pd.DataFrame:
-    """ts e una colonna per media mobile delle chiusure (vuota finché non ci sono abbastanza
-    sedute: lo storico nel database parte da fine ottobre 2025)."""
-    medie = giornaliero[['ts']].copy()
-    for numero in sedute:
-        medie[numero] = giornaliero['prezzo'].rolling(numero).mean()
-    return medie
 
 
 def riga_di(table_data: Optional[List[Dict]], etichetta: str) -> Optional[Dict]:
@@ -179,7 +167,7 @@ def _formato_euro(asse) -> None:
 
 def _legenda(asse, titolo: str, colore: str, voci: List = (), variazione=None) -> None:
     """Il nome del pannello col colore del suo periodo e la variazione del periodo, più
-    carico, operazioni e medie se ci sono."""
+    carico, operazioni e massimo e minimo se ci sono."""
     if variazione is not None:
         titolo = f'{titolo} {prima_cifra(variazione)}%'
     maniglie = [Line2D([], [], color=colore, linewidth=1.5, label=titolo), *voci]
@@ -307,8 +295,7 @@ class ChartGenerator:
                 estremi = [riga['price'] for riga in (riga_di(table_data, 'Max'),
                                                       riga_di(table_data, 'Min')) if riga]
                 self._plot_giornaliero(axis, dati, days, current_price, elenco, carico, segni or [],
-                                       variazione, medie_mobili(giornaliero),
-                                       estremi or [dati['prezzo'].max(), dati['prezzo'].min()])
+                                       variazione, estremi or [dati['prezzo'].max(), dati['prezzo'].min()])
             if index == 2:
                 axis.yaxis.tick_right()
         self._plot_oggi(ax_oggi, dati_oggi(oggi, adesso), adesso, current_price, elenco[-1][2],
@@ -380,12 +367,11 @@ class ChartGenerator:
     def _plot_giornaliero(self, axis, dati: pd.DataFrame, giorni: int, current_price: float,
                           elenco: List[tuple], carico: Optional[float] = None,
                           segni: List[Dict] = (), variazione: Optional[float] = None,
-                          medie: Optional[pd.DataFrame] = None,
                           estremi: List[float] = ()) -> None:
         """Il pannello annuale: una chiusura al giorno, tick ogni 15 giorni (il 1° e il 15).
 
         Un tratto per periodo, col suo colore, che riparte dall'ultimo punto del precedente;
-        sotto, le medie mobili (dove ci sono) e le righe del massimo e del minimo.
+        sotto, le righe del massimo e del minimo.
         """
         titolo = f"Ultimi {giorni} giorni"
         if len(dati) < 2:
@@ -412,15 +398,7 @@ class ChartGenerator:
                 if prezzo is None:   # sulla curva, alla chiusura di quel giorno
                     prezzo = dati.loc[dati['ts'] <= giorno, 'prezzo'].iloc[-1]
                 punti.append((giorno, prezzo, segno['acquisto']))
-        voci = []
-        if medie is not None:
-            medie = medie[medie['ts'] >= dati['ts'].iloc[0]]
-            for numero, colore in zip(MEDIE, COLORI_MEDIE):
-                if numero in medie and medie[numero].notna().any():
-                    axis.plot(medie['ts'], medie[numero], color=colore, linewidth=1.1, zorder=1)
-                    voci.append(Line2D([], [], color=colore, linewidth=1.1, label=f'Media {numero}g'))
-        if estremi:
-            voci += _massimo_minimo(axis, estremi)
+        voci = _massimo_minimo(axis, estremi) if estremi else []
         voci += _voce_carico(axis, carico, dati['prezzo']) + _segna_operazioni(axis, punti)
         _legenda(axis, titolo, next(c for numero, _, c in elenco if numero == giorni), voci,
                  variazione)
