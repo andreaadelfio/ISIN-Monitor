@@ -24,6 +24,7 @@ class DbFinto:
         self.righe = righe
         self.rotto = rotto
         self.scritture = []
+        self.registro = {}   # operazioni del registro investimenti per ISIN
 
     def titoli(self):
         if self.rotto:
@@ -41,6 +42,9 @@ class DbFinto:
     def serie(self, isin, da, passo):
         return [{'ts': '2026-10-20T00:00:00+01:00', 'prezzo': 19.0},
                 {'ts': '2026-10-27T00:00:00+01:00', 'prezzo': 20.0}]
+
+    def operazioni(self, isin):
+        return self.registro.get(isin, [])
 
 
 class BorsaFinta:
@@ -116,6 +120,28 @@ def test_giro_una_scrittura_e_avviso_con_link(monitor):
     assert '<a href="https://esempio.pages.dev/?isin=IT0003132476">MyFinance</a>' in dati['caption']
     # La cache ha i prezzi nuovi: il prossimo giro (anche offline) confronta con questi
     assert stato.leggi('titoli.json')[0]['ultimo_prezzo'] == 20.2
+
+
+def test_avviso_con_la_tua_posizione(monitor):
+    monitor.db.registro['IT0003132476'] = [
+        {'posizione': 3, 'data': '2026-01-10', 'operazione': 'Investimento', 'importo': '-180',
+         'quantita': '10', 'abp': None}]
+    monitor.borsa = BorsaFinta({'IT0003132476': 20.2})
+    monitor.controlla_tutti()
+    metodo, dati = monitor.telegram_inviati[0]
+    assert metodo == 'sendPhoto'
+    # Carico 18 €: +2.2 € per quota, +22 € su 10 quote
+    assert 'Carico: €18 (+12.222% 📈) +2.200 → 10 quote, +22.00€' in dati['caption']
+    # Massimo e minimo dell'anno, prezzo attuale compreso (qui è il nuovo massimo)
+    assert 'Max: €20.2 (+0.000% ⚪) +0.000' in dati['caption']
+    assert 'Min: €19 (+6.316% 📈) +1.200' in dati['caption']
+
+
+def test_segnale_di_myfinance_solo_senza_errori():
+    riga = {'isin': 'IT0003132476', 'segnale': 'compra', 'punteggio': 78, 'ultimo': []}
+    assert (modulo_app.titolo_da_riga(riga)['segnale'], modulo_app.titolo_da_riga(riga)['punteggio']) == (
+        'compra', 78)
+    assert modulo_app.titolo_da_riga({**riga, 'errore': 'Yahoo non risponde'})['segnale'] is None
 
 
 def test_sotto_soglia_niente_avviso_e_invariato_non_salvato(monitor):

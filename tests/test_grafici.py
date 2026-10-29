@@ -6,7 +6,8 @@ from core.app import chiusure_storiche
 import matplotlib.pyplot as plt
 
 from core.chart_generator import (COLORI_PERIODI, SEDUTA, ChartGenerator, asse_sedute, colore_di,
-                                  dati_oggi, dati_pannello, in_orario, periodi, tabella_prezzi)
+                                  dati_oggi, dati_pannello, in_orario, medie_mobili, periodi,
+                                  prima_cifra, tabella_prezzi, etichetta_segnale)
 
 ADESSO = datetime(2026, 10, 27, 15, 0)
 
@@ -72,8 +73,13 @@ BLU, ACQUA, ARANCIO, VIOLA = COLORI_PERIODI
 
 
 def linee(asse):
-    """(colore, prezzi) delle linee disegnate, senza la linea del prezzo attuale (l'ultima)."""
-    return [(linea.get_color(), list(linea.get_ydata())) for linea in asse.get_lines()][:-1]
+    """(colore, prezzi) delle linee dei periodi (senza prezzo attuale, massimo, minimo, medie)."""
+    return [(linea.get_color(), list(linea.get_ydata())) for linea in asse.get_lines()
+            if linea.get_color() in COLORI_PERIODI]
+
+
+def legenda(asse):
+    return [testo.get_text() for testo in asse.get_legend().get_texts()]
 
 
 def test_colori_dei_periodi():
@@ -102,6 +108,83 @@ def test_annuale_un_tratto_per_periodo_attaccato_al_precedente():
     plt.close(fig)
     # nessuna chiusura negli ultimi 30 giorni prima del 20/10: niente tratto verde acqua
     assert disegnate == [(BLU, [10, 11]), (ARANCIO, [11, 12, 13]), (VIOLA, [13, 14])]
+
+
+def test_carico_e_operazioni_sul_grafico_annuale():
+    segni = [{'data': datetime(2025, 11, 3).date(), 'acquisto': True, 'prezzo': 10.5},
+             {'data': datetime(2026, 10, 26).date(), 'acquisto': False, 'prezzo': None}]
+    fig, asse = plt.subplots()
+    ChartGenerator()._plot_giornaliero(asse, GIORNALIERO, 360, 14.0, periodi([7, 30, 360], ADESSO),
+                                       carico=12.0, segni=segni)
+    carico = [linea for linea in asse.get_lines() if linea.get_linestyle() == ':']
+    triangoli = [list(map(tuple, punti.get_offsets())) for punti in asse.collections[-2:]]   # acquisti, vendite
+    voci = [testo.get_text() for testo in asse.get_legend().get_texts()]
+    plt.close(fig)
+    assert len(carico) == 1 and list(carico[0].get_ydata()) == [12.0, 12.0]
+    assert [len(punti) for punti in triangoli] == [1, 1]
+    assert triangoli[1][0][1] == 13.0          # vendita senza prezzo: sulla chiusura del giorno
+    assert voci == ['Ultimi 360 giorni', 'Carico €12', 'Acquisto', 'Vendita']
+
+
+def test_carico_lontano_solo_in_legenda():
+    fig, asse = plt.subplots()
+    ChartGenerator()._plot_giornaliero(asse, GIORNALIERO, 360, 14.0, periodi([7, 30, 360], ADESSO),
+                                       carico=3.25)
+    punteggiate = [linea for linea in asse.get_lines() if linea.get_linestyle() == ':']
+    voci = [testo.get_text() for testo in asse.get_legend().get_texts()]
+    plt.close(fig)
+    assert punteggiate == [] and voci == ['Ultimi 360 giorni', 'Carico €3.25 (sotto)']
+
+
+def test_prima_cifra_decimale_significativa():
+    assert [prima_cifra(v) for v in (-11.313, 0.808, 0.048, -0.0098, -0.0021, 9.843, 0.97, 0)] == [
+        '-11.3', '+0.8', '+0.05', '-0.01', '-0.002', '+9.8', '+1.0', '+0.0']
+
+
+def test_tabella_arrotondata():
+    righe = [{'label': 'Open', 'price': 5.941, 'variation': 0.808, 'difference': 0.048},
+             {'label': '30gg', 'price': 6.753, 'variation': -11.313, 'difference': -0.764},
+             {'label': 'Carico', 'price': 16.0769, 'variation': 61.225, 'difference': 9.843}]
+    fig, asse = plt.subplots()
+    ChartGenerator()._create_summary_table(asse, righe)
+    celle = asse.tables[0].get_celld()
+    testi = [[celle[riga, col].get_text().get_text() for col in range(4)] for riga in (1, 2, 3)]
+    plt.close(fig)
+    assert testi == [['Open', '€5.94', '+0.8%', '+0.05'],
+                     ['30gg', '€6.75', '-11.3%', '-0.8'],
+                     ['Carico', '€16.08', '+61.2%', '+9.8']]
+
+
+def test_legenda_con_la_variazione_del_periodo():
+    dati = tabella(('2026-10-23 09:00', 1), ('2026-10-27 09:00', 2))
+    fig, asse = plt.subplots()
+    ChartGenerator()._plot_sedute(asse, dati, 7, 2.0, periodi([7, 30, 360], ADESSO),
+                                  variazione=-3.456)
+    voci = legenda(asse)
+    plt.close(fig)
+    assert voci == ['Ultimi 7 giorni -3.5%']
+
+
+def test_segnale_di_myfinance():
+    assert etichetta_segnale('compra', 78) == 'MyFinance: Compra · 78/100'
+    assert etichetta_segnale('evita', None) == 'MyFinance: Evita per ora'
+    assert etichetta_segnale(None, 50) is None
+
+
+def test_annuale_con_medie_massimo_e_minimo():
+    giornaliero = tabella(*[(f'2026-0{1 + i // 28}-{1 + i % 28:02d}', i + 1) for i in range(60)])
+    medie = medie_mobili(giornaliero, sedute=(5, 100))
+    assert medie[5].iloc[4] == 3.0 and medie[5].isna().sum() == 4   # media di 1..5
+    assert medie[100].isna().all()                                    # troppe poche sedute
+
+    fig, asse = plt.subplots()
+    ChartGenerator()._plot_giornaliero(asse, giornaliero, 360, 50.0, periodi([7, 30, 360], ADESSO),
+                                       medie=medie_mobili(giornaliero), estremi=[60.0, 1.0])
+    voci = legenda(asse)
+    righe = [list(linea.get_ydata()) for linea in asse.get_lines() if linea.get_color() == '#9a9a9a']
+    plt.close(fig)
+    assert voci == ['Ultimi 360 giorni', 'Media 50g', 'Max e min']   # la media a 200 non c'è ancora
+    assert righe == [[60.0, 60.0], [1.0, 1.0]]
 
 
 def test_chiusure_storiche_per_la_tabella():

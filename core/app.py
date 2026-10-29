@@ -22,7 +22,7 @@ from zoneinfo import ZoneInfo
 
 import requests
 
-from . import proposte, stato, storico
+from . import posizioni, proposte, stato, storico
 from .database import Database, ErroreDatabase
 from .orario import INTERVALLO, in_orario, secondi_al_prossimo_giro
 from .message_templates import CaptionTemplates
@@ -54,6 +54,9 @@ def titolo_da_riga(riga: Dict) -> Dict:
         'ultimo_prezzo': float(ultimo['prezzo']) if ultimo else None,
         'ultimo_ts': ultimo['ts'] if ultimo else None,
         'senza_storico': ultimo is None,
+        # L'analisi serale di MyFinance (niente segnale se l'analisi è andata in errore)
+        'segnale': None if riga.get('errore') else riga.get('segnale'),
+        'punteggio': riga.get('punteggio'),
     }
 
 
@@ -291,32 +294,47 @@ class ISINMonitor:
 
     @profile()
     def dati_grafico(self, isin: str, adesso: datetime) -> Dict:
-        """Lo storico per grafico e tabella, tutto da Supabase: tre richieste leggere."""
+        """Storico per grafico e tabella, e la tua posizione sul titolo, tutto da Supabase."""
         from .chart_generator import GIORNI_DETTAGLIO, tabella_prezzi
         monitoring = self.config['monitoring']
         giorni = max(monitoring.get('price_comparison_days', [360])
                      + monitoring.get('historical_table_days', [360]))
         mezzanotte = adesso.replace(hour=0, minute=0, second=0, microsecond=0)
+        try:
+            operazioni = self.db.operazioni(isin)
+        except ErroreDatabase as errore:
+            print(f"⚠️ Operazioni di MyFinance non lette: {errore}")
+            operazioni = []
         return {
             'oggi': tabella_prezzi(self.db.prezzi(isin, mezzanotte)),
             'recente': tabella_prezzi(
                 self.db.serie(isin, mezzanotte - timedelta(days=GIORNI_DETTAGLIO), '15 minutes')),
             'giornaliero': tabella_prezzi(
                 self.db.serie(isin, mezzanotte - timedelta(days=giorni + 5), '1 day')),
+            'carico': posizioni.carico(operazioni, adesso.date()),
+            'segni': posizioni.acquisti_e_vendite(operazioni),
         }
 
     def dati_tabella(self, prezzo: float, precedente: Optional[float], dati: Optional[Dict],
                      adesso: datetime) -> List[Dict]:
         if not dati:
             return TableDataGenerator.generate_table_data(prezzo, previous_price=precedente)
-        periodi = self.config['monitoring'].get('historical_table_days', [1, 7, 30, 360])
+        from .chart_generator import dati_pannello
+        monitoring = self.config['monitoring']
+        periodi = monitoring.get('historical_table_days', [1, 7, 30, 360])
         giornaliero, oggi = dati['giornaliero'], dati['oggi']
+        # Massimo e minimo sul periodo più lungo dei grafici, prezzo attuale compreso
+        lungo = max(monitoring.get('price_comparison_days', [360]))
+        chiusure = [*dati_pannello(lungo, dati['recente'], giornaliero,
+                                   adesso.replace(tzinfo=None))['prezzo'], prezzo]
         return TableDataGenerator.generate_table_data(
             prezzo,
             opening_price=float(oggi['prezzo'].iloc[0]) if not oggi.empty else None,
             previous_price=precedente,
             historical_prices=chiusure_storiche(giornaliero, adesso, periodi),
             oldest_price=float(giornaliero['prezzo'].iloc[0]) if not giornaliero.empty else None,
+            position=dati.get('carico'),
+            extremes=(max(chiusure), min(chiusure)),
         )
 
     def grafico(self, titolo: Dict, prezzo: float, precedente: Optional[float],
@@ -335,6 +353,9 @@ class ISINMonitor:
             titolo['nome'], prezzo, precedente, tabella,
             dati['oggi'], dati['recente'], dati['giornaliero'],
             adesso.replace(tzinfo=None),
+            carico=dati['carico']['prezzo'] if dati.get('carico') else None,
+            segni=dati.get('segni'),
+            segnale=titolo.get('segnale'), punteggio=titolo.get('punteggio'),
         )
         return png, tabella
 

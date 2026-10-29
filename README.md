@@ -38,11 +38,23 @@ PC spento) e manda su Telegram i cambiamenti delle proposte di MyFinance.
 - **Avvisi**: variazione rispetto all'ultimo prezzo salvato ≥ `soglia_avviso` (in su o in
   giù). Non c'è pausa fra un avviso e l'altro: è voluto. L'avviso ha i link a Fineco,
   Borsa Italiana e alla scheda in MyFinance (`<myfinance_url>/?isin=<ISIN>`).
-- **Grafici**: solo dallo storico in Supabase, tre richieste per avviso. In alto 360 giorni
+- **Grafici**: solo da Supabase, quattro richieste per avviso. In alto 360 giorni
   (una chiusura al giorno, date ogni 15 giorni), 30 e 7 giorni (un prezzo ogni 15 minuti,
-  senza notti e weekend, date per giorno); in basso Oggi (tutti i prezzi di Borsa Italiana
-  di oggi, con i punti verdi sopra l'apertura e rossi sotto) e la tabella con apertura e
-  chiusure di 1, 7, 30 e 360 giorni fa. Il punto rosso è il prezzo attuale.
+  una linea per seduta su fondo grigio, senza notti e weekend); in basso Oggi (tutti i
+  prezzi di Borsa Italiana di oggi, con i punti verdi sopra l'apertura e rossi sotto) e la
+  tabella con apertura, chiusure di 1, 7, 30 e 360 giorni fa, massimo e minimo dell'anno
+  (prezzi in centesimi, variazioni fino alla prima cifra decimale significativa). Il punto
+  rosso è il prezzo attuale. Ogni periodo ha il suo colore anche dentro i pannelli più
+  lunghi (blu 360 giorni, verde acqua 30, arancio 7, viola oggi) e la legenda di ogni
+  pannello ne dà la variazione. Nel pannello annuale anche le medie mobili a 50 e 200
+  sedute (dove lo storico basta) e le righe del massimo e del minimo. In alto a destra il
+  segnale e il punteggio dell'analisi di MyFinance, coi colori del sito.
+- **Le tue posizioni**: dal registro `investimenti` di MyFinance. Se hai il titolo, una riga
+  punteggiata scura segna il prezzo di carico (calcolato come nel sito: ABP del conto, o
+  costo diviso quote), la tabella ha la riga "Carico" e il messaggio il guadagno o la
+  perdita su tutte le quote; se il carico è lontano dai prezzi di un pannello la legenda
+  dice "sopra" o "sotto". Acquisti (▲) e vendite (▼) sono triangoli nei pannelli in alto;
+  il prezzo di vendita è il Rimborso più la Cedola dello stesso giorno.
 - **Proposte**: l'analisi serale di MyFinance assegna a ogni titolo un segnale (Compra, Da
   valutare, Attendi, Evita per ora) e un punteggio. Al primo avvio del mattino, se un
   segnale o la proposta del giorno (il "Compra" con il punteggio più alto) sono cambiati,
@@ -168,11 +180,12 @@ monitor.py            punto d'ingresso (controllo d'orario, poi core/app.py)
 migrazione.py         migrazione una tantum di CSV e storico locale
 setup.sh              servizio e timer systemd
 core/app.py           i giri ogni 15 secondi, coda degli avvisi, lavori del mattino
-core/database.py      Supabase (watchlist, prezzi, serie_prezzi)
+core/database.py      Supabase (watchlist, prezzi, serie_prezzi, investimenti)
 core/price_providers.py  Borsa Italiana e Yahoo
 core/storico.py       riempimento dei buchi con Yahoo
 core/chart_generator.py  grafici
 core/proposte.py      cambiamenti delle proposte di MyFinance
+core/posizioni.py     prezzo di carico, acquisti e vendite dal registro investimenti
 core/orario.py        orario di mercato e OnCalendar del timer
 core/stato.py         file di stato in ~/.local/state/isin-monitor
 core/message_templates.py, core/utils.py   testo e tabella degli avvisi

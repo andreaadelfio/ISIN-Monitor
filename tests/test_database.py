@@ -51,6 +51,15 @@ def test_letture_a_pagine():
     assert sessione.richieste[0][1].endswith('/rest/v1/rpc/serie_prezzi')
 
 
+def test_operazioni_senza_le_righe_domani():
+    db, sessione = db_con(Risposta([]))
+    db.operazioni('IT0000072618')
+    metodo, url, kwargs = sessione.richieste[0]
+    assert url.endswith('/rest/v1/investimenti')
+    assert kwargs['params']['isin'] == 'eq.IT0000072618'
+    assert kwargs['params']['domani'] == 'is.false'
+
+
 def test_scrittura_a_blocchi_senza_sovrascrivere(monkeypatch):
     monkeypatch.setattr(database, 'RIGHE_PER_SCRITTURA', 2)
     db, sessione = db_con(Risposta(None, 201), Risposta(None, 201))

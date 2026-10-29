@@ -111,7 +111,8 @@ class Database:
     def titoli(self) -> List[Dict]:
         """La watchlist, con l'ultimo prezzo salvato di ogni titolo (una sola richiesta)."""
         return self._richiesta('GET', 'watchlist', params={
-            'select': 'isin,simbolo,simbolo_borsa,valuta,nome,soglia_avviso,ultimo:prezzi(ts,prezzo)',
+            'select': 'isin,simbolo,simbolo_borsa,valuta,nome,soglia_avviso,segnale,punteggio,errore,'
+                      'ultimo:prezzi(ts,prezzo)',
             'ultimo.order': 'ts.desc',
             'ultimo.limit': 1,
             'order': 'isin',
@@ -154,6 +155,14 @@ class Database:
         """Un prezzo (l'ultimo) per ogni intervallo `passo` (es. '15 minutes', '1 day')."""
         return self._leggi('rpc/serie_prezzi', {
             'p_isin': isin, 'p_da': da.isoformat(), 'p_passo': passo, 'order': 'ts',
+        })
+
+    def operazioni(self, isin: str) -> List[Dict]:
+        """Le tue operazioni sul titolo, dal registro investimenti di MyFinance (senza le
+        righe "domani", che non sono operazioni vere)."""
+        return self._leggi('investimenti', {
+            'select': 'posizione,data,operazione,quantita,importo,abp',
+            'isin': f'eq.{isin}', 'domani': 'is.false', 'order': 'data,id',
         })
 
     def conta_prezzi(self, isin: str, fonte: Optional[str] = None) -> int:

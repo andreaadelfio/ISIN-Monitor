@@ -47,7 +47,9 @@ class TableDataGenerator:
     def generate_table_data(current_price: float, opening_price: Optional[float] = None, 
                            previous_price: Optional[float] = None, 
                            historical_prices: Optional[Dict[int, float]] = None,
-                           oldest_price: Optional[float] = None):
+                           oldest_price: Optional[float] = None,
+                           position: Optional[Dict] = None,
+                           extremes: Optional[tuple] = None):
         """
         Genera i dati per la tabella in formato standardizzato.
         
@@ -104,6 +106,30 @@ class TableDataGenerator:
                 'variation': variation,
                 'difference': price_diff,
                 'reference_price': oldest_price
+            })
+
+        # Massimo e minimo del periodo più lungo dei grafici (le righe del pannello annuale)
+        for label, price in zip(('Max', 'Min'), extremes or ()):
+            if price:
+                price_diff = current_price - price
+                table_rows.append({
+                    'label': label,
+                    'price': price,
+                    'variation': (price_diff / price) * 100,
+                    'difference': price_diff,
+                    'reference_price': price
+                })
+
+        # La tua posizione (prezzo di carico di MyFinance), con le quote per il totale
+        if position:
+            price_diff = current_price - position['prezzo']
+            table_rows.append({
+                'label': 'Carico',
+                'price': position['prezzo'],
+                'variation': (price_diff / position['prezzo']) * 100,
+                'difference': price_diff,
+                'reference_price': position['prezzo'],
+                'quote': position['quote'],
             })
         return table_rows
     

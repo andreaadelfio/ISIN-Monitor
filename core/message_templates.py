@@ -61,7 +61,11 @@ class CaptionTemplates:
         for row in table_data:
             variation_emoji = CaptionTemplates._get_percentage_emoji(row['variation'], is_positive_good=True)
             price_formatted = NumberFormatter.format_number(row['price'], max_decimals=4)
-            message += f"{row['label']}: €{price_formatted} ({row['variation']:+.3f}% {variation_emoji}) {row['difference']:+.3f}\n"
+            message += f"{row['label']}: €{price_formatted} ({row['variation']:+.3f}% {variation_emoji}) {row['difference']:+.3f}"
+            if row.get('quote'):   # la tua posizione: guadagno o perdita su tutte le quote
+                quote = NumberFormatter.format_number(row['quote'])
+                message += f" → {quote} quote, {row['difference'] * row['quote']:+.2f}€"
+            message += "\n"
 
         message += "\r</code>"
 
