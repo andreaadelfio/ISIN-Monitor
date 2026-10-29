@@ -7,7 +7,8 @@ I dati arrivano solo dalla tabella prezzi di Supabase (vedi ISINMonitor.dati_gra
   - recente: un prezzo ogni 15 minuti dell'ultimo mese, con le chiusure di Yahoo
     nei giorni a PC spento;
   - giornaliero: una chiusura al giorno dell'ultimo anno.
-Pannelli: in alto 360, 30 e 7 giorni, in basso Oggi e la tabella riassuntiva.
+L'immagine è verticale, pensata per il telefono: in alto Oggi a tutta larghezza, sotto su
+due colonne 7 e 30 giorni, poi 360 giorni e la tabella riassuntiva.
 Ogni periodo ha un colore (blu 360 giorni, verde acqua 30, arancio 7, viola oggi) che
 resta lo stesso anche dentro i pannelli più lunghi; la legenda dà la variazione del periodo.
 Nel pannello annuale anche le righe del massimo e del minimo.
@@ -33,6 +34,12 @@ from matplotlib.ticker import FuncFormatter
 
 # Fino a quanti giorni un pannello usa i dati ogni 15 minuti (oltre, una chiusura al giorno)
 GIORNI_DETTAGLIO = 31
+# Immagine verticale per il telefono: 6×9 pollici a 200 dpi (1200×1800, 2:3, che sullo
+# schermo riempie tutta la larghezza). Le scritte sono grandi rispetto alla larghezza,
+# così si leggono senza ingrandire
+LARGHEZZA, ALTEZZA, DPI = 6, 9, 200
+TESTO = 10
+MESI = 'gen feb mar apr mag giu lug ago set ott nov dic'.split()
 # Spazio di una seduta sull'asse a sedute: il resto, fino a 1, è lo stacco fra un giorno e l'altro
 SEDUTA = 0.8
 # Un colore per periodo, dal più lungo a oggi: blu, verde acqua, arancio, viola
@@ -171,8 +178,11 @@ def _legenda(asse, titolo: str, colore: str, voci: List = (), variazione=None) -
     if variazione is not None:
         titolo = f'{titolo} {prima_cifra(variazione)}%'
     maniglie = [Line2D([], [], color=colore, linewidth=1.5, label=titolo), *voci]
-    asse.legend(handles=maniglie, frameon=False, loc='best',
-                fontsize=10 if len(maniglie) == 1 else 8)
+    # Fondo bianco, se finisce sopra la curva
+    asse.legend(handles=maniglie, loc='best',
+                fontsize=TESTO if len(maniglie) == 1 else TESTO - 1, frameon=True,
+                facecolor='white', edgecolor='none', framealpha=0.85,
+                columnspacing=1).set_zorder(10)
 
 
 def _voce_carico(asse, carico: Optional[float], prezzi) -> List:
@@ -217,7 +227,7 @@ def _massimo_minimo(asse, valori: List[float]) -> List:
 
 def _nessun_dato(asse, titolo: str) -> None:
     asse.text(0.5, 0.5, f'Dati non disponibili\nper {titolo.lower()}', ha='center',
-              va='center', transform=asse.transAxes, fontsize=16, fontweight='bold')
+              va='center', transform=asse.transAxes, fontsize=TESTO + 2, fontweight='bold')
     asse.set_xticks([])
     asse.set_yticks([])
 
@@ -239,7 +249,7 @@ class ChartGenerator:
         plt.rcParams['xtick.labelsize'] = 12
         plt.rcParams['ytick.labelsize'] = 12
         plt.rcParams['legend.fontsize'] = 12
-        self.table_fontsize = 14
+        self.table_fontsize = TESTO
 
     @profile()
     def create_comprehensive_chart(self, nome: str, current_price: float,
@@ -252,7 +262,7 @@ class ChartGenerator:
                                    segni: Optional[List[Dict]] = None,
                                    segnale: Optional[str] = None,
                                    punteggio: Optional[int] = None) -> bytes:
-        """Il grafico completo (PNG): tre periodi in alto, oggi e la tabella in basso.
+        """Il grafico completo (PNG, verticale): Oggi, i periodi dal più breve e la tabella.
 
         carico e segni (vedi core.posizioni) ci sono solo per i titoli che hai avuto;
         segnale e punteggio sono quelli dell'analisi di MyFinance (watchlist).
@@ -263,25 +273,30 @@ class ChartGenerator:
         if previous_price:
             variazione = current_price - previous_price
             title_color = 'green' if variazione > 0 else 'red' if variazione < 0 else 'black'
-        title = (f'{nome} - €{NumberFormatter.format_number(current_price)} - '
-                 f'{adesso.strftime("%H:%M:%S")}')
 
-        fig = plt.figure(figsize=(12.5, 6.6), facecolor='#f4f6f8')
-        outer_gs = fig.add_gridspec(2, 1, height_ratios=[1.08, 0.92], hspace=0.16)
-        fig.subplots_adjust(top=0.93, bottom=0.045, left=0.06, right=0.94)
-        top_gs = outer_gs[0].subgridspec(1, 3, wspace=0.17)
-        bot_gs = outer_gs[1].subgridspec(1, 2, wspace=0.08)
-
-        axes_top = [fig.add_subplot(top_gs[0, index]) for index in range(3)]
-        ax_oggi = fig.add_subplot(bot_gs[0, 0])
-        ax_tabella = fig.add_subplot(bot_gs[0, 1])
+        # Oggi a tutta larghezza; sotto, su due colonne, i periodi dal più breve e la tabella.
+        # Il pannello della colonna di destra ha i prezzi a destra
+        fig = plt.figure(figsize=(LARGHEZZA, ALTEZZA), facecolor='white')
+        griglia = fig.add_gridspec(3, 2, hspace=0.2, wspace=0.05)
+        fig.subplots_adjust(top=0.905, bottom=0.035, left=0.13, right=0.87)
+        ax_oggi = fig.add_subplot(griglia[0, :])
+        celle = [griglia[1, 0], griglia[1, 1], griglia[2, 0]]   # dal periodo più breve
+        numero = len(self.comparison_days)
+        # comparison_days va dal più lungo: il più lungo nell'ultima cella
+        axes_top = [fig.add_subplot(celle[numero - 1 - indice]) for indice in range(numero)]
+        a_destra = [celle[numero - 1 - indice] is celle[1] for indice in range(numero)]
+        ax_tabella = fig.add_subplot(griglia[2, 1])
+        # La tabella non ha l'asse dei prezzi: arriva fino al bordo destro
+        posizione = ax_tabella.get_position()
+        ax_tabella.set_position([posizione.x0, posizione.y0, 0.975 - posizione.x0,
+                                 posizione.height])
         for axis in [*axes_top, ax_oggi, ax_tabella]:
             axis.set_facecolor('white')
             for spine in axis.spines.values():
                 spine.set_color('#d9dee3')
 
         elenco = periodi(self.comparison_days, adesso)
-        for index, (axis, days) in enumerate(zip(axes_top, self.comparison_days)):
+        for axis, days, destra in zip(axes_top, self.comparison_days, a_destra):
             dati = dati_pannello(days, recente, giornaliero, adesso)
             variazione = variazione_di(table_data, f'{days}gg')
             if variazione is None and not dati.empty:
@@ -296,24 +311,27 @@ class ChartGenerator:
                                                       riga_di(table_data, 'Min')) if riga]
                 self._plot_giornaliero(axis, dati, days, current_price, elenco, carico, segni or [],
                                        variazione, estremi or [dati['prezzo'].max(), dati['prezzo'].min()])
-            if index == 2:
+            if destra:
                 axis.yaxis.tick_right()
         self._plot_oggi(ax_oggi, dati_oggi(oggi, adesso), adesso, current_price, elenco[-1][2],
                         carico, variazione_di(table_data, 'Open'))
         self._create_summary_table(ax_tabella, table_data=table_data)
 
-        # Titolo a sinistra, così a destra c'è posto per il segnale anche coi nomi lunghi
-        fig.suptitle(title, fontsize=18, fontweight='bold', x=0.06, y=0.975, ha='left',
-                     color=title_color)
+        # In alto il nome; sotto prezzo e ora (colorati se il prezzo è salito o sceso) e,
+        # a destra, il segnale di MyFinance
+        fig.text(0.03, 0.988, nome, ha='left', va='top', fontsize=TESTO + 5, fontweight='bold')
+        fig.text(0.03, 0.952, f'€{NumberFormatter.format_number(current_price)} · '
+                 f'{adesso.strftime("%H:%M:%S")}', ha='left', va='top', fontsize=TESTO + 4,
+                 fontweight='bold', color=title_color)
         badge = etichetta_segnale(segnale, punteggio)
         if badge:
             fondo, inchiostro = COLORI_SEGNALI[segnale]
-            fig.text(0.94, 0.975, badge, ha='right', va='center', fontsize=11, fontweight='bold',
-                     color=inchiostro,
+            fig.text(0.975, 0.949, badge, ha='right', va='top', fontsize=TESTO - 1,
+                     fontweight='bold', color=inchiostro,
                      bbox=dict(boxstyle='round,pad=0.4', facecolor=fondo, edgecolor='none'))
 
         img_buffer = io.BytesIO()
-        fig.savefig(img_buffer, format='png', dpi=100, facecolor='white',
+        fig.savefig(img_buffer, format='png', dpi=DPI, facecolor='white',
                     edgecolor='none', pil_kwargs={'compress_level': 6})
         plt.close(fig)
         return img_buffer.getvalue()
@@ -322,7 +340,7 @@ class ChartGenerator:
         """Parti comuni dei pannelli: linea del prezzo attuale, griglia, tick, euro."""
         axis.axhline(y=current_price, color='grey', linestyle='--', alpha=0.7, linewidth=1.2)
         axis.grid(True, alpha=0.25)
-        axis.tick_params(axis='both', direction='in', labelsize=9)
+        axis.tick_params(axis='both', direction='in', labelsize=TESTO)
         _formato_euro(axis)
 
     def _plot_sedute(self, axis, dati: pd.DataFrame, giorni: int, current_price: float,
@@ -334,11 +352,11 @@ class ChartGenerator:
         i prezzi di ogni giorno. Un giorno con un prezzo solo resta un punto. Ogni seduta
         ha il colore del periodo più breve in cui cade.
         """
-        titolo = f"Ultimi {giorni} giorni"
+        titolo = f"{giorni} giorni"
         if len(dati) < 2:
             _nessun_dato(axis, titolo)
             return
-        x, tick, etichette = asse_sedute(dati['ts'], self.apertura, self.chiusura)
+        x, tick, etichette = asse_sedute(dati['ts'], self.apertura, self.chiusura, 4)
         sedute = dati.assign(x=x).groupby(dati['ts'].dt.normalize(), sort=False)
         per_giorno = {}
         for indice, (giorno, seduta) in enumerate(sedute):
@@ -368,12 +386,12 @@ class ChartGenerator:
                           elenco: List[tuple], carico: Optional[float] = None,
                           segni: List[Dict] = (), variazione: Optional[float] = None,
                           estremi: List[float] = ()) -> None:
-        """Il pannello annuale: una chiusura al giorno, tick ogni 15 giorni (il 1° e il 15).
+        """Il pannello annuale: una chiusura al giorno, un'etichetta al mese.
 
         Un tratto per periodo, col suo colore, che riparte dall'ultimo punto del precedente;
         sotto, le righe del massimo e del minimo.
         """
-        titolo = f"Ultimi {giorni} giorni"
+        titolo = f"{giorni} giorni"
         if len(dati) < 2:
             _nessun_dato(axis, titolo)
             return
@@ -387,8 +405,10 @@ class ChartGenerator:
                 axis.plot(tratto['ts'], tratto['prezzo'], color=colore, linewidth=1.5)
         axis.scatter([dati['ts'].iloc[-1]], [dati['prezzo'].iloc[-1]], color='red', s=50,
                      zorder=5, edgecolor='darkred', linewidth=1.5)
-        axis.xaxis.set_major_locator(mdates.DayLocator(bymonthday=[1, 15]))
-        axis.xaxis.set_major_formatter(mdates.DateFormatter('%d/%m'))
+        # Un'etichetta ogni due mesi, col nome italiano
+        axis.xaxis.set_major_locator(mdates.MonthLocator(interval=2))
+        axis.xaxis.set_major_formatter(
+            FuncFormatter(lambda valore, _: MESI[mdates.num2date(valore).month - 1]))
         axis.set_xlim(dati['ts'].iloc[0], dati['ts'].iloc[-1] + timedelta(days=3))
         punti = []
         for segno in segni:
@@ -403,7 +423,6 @@ class ChartGenerator:
         _legenda(axis, titolo, next(c for numero, _, c in elenco if numero == giorni), voci,
                  variazione)
         self._rifinisci(axis, current_price)
-        axis.tick_params(axis='x', labelsize=7, labelrotation=90, pad=2)
 
     def _plot_oggi(self, axis, oggi: pd.DataFrame, adesso: datetime, current_price: float,
                    colore: str = COLORI_PERIODI[-1], carico: Optional[float] = None,
@@ -419,16 +438,17 @@ class ChartGenerator:
         axis.scatter([dati['ts'].iloc[-1]], [dati['prezzo'].iloc[-1]], color='red', s=70,
                      marker='v', zorder=5)
 
-        locator = mdates.AutoDateLocator(minticks=4, maxticks=10)
+        locator = mdates.AutoDateLocator(minticks=4, maxticks=8)
         axis.xaxis.set_major_locator(locator)
         axis.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M'))
         inizio, fine = dati['ts'].iloc[0], dati['ts'].iloc[-1]
         if fine - inizio < timedelta(minutes=10):
             inizio, fine = inizio - timedelta(minutes=5), fine + timedelta(minutes=5)
-        axis.set_xlim(inizio, fine)
+        margine = (fine - inizio) * 0.015   # i triangoli di apertura e ultimo prezzo interi
+        axis.set_xlim(inizio - margine, fine + margine)
         voci = _voce_carico(axis, carico, dati['prezzo'])
         axis.legend(handles=[linea, *voci], frameon=False, loc='upper left',
-                    fontsize=10 if not voci else 8)
+                    fontsize=TESTO if not voci else TESTO - 1)
         self._rifinisci(axis, current_price)
 
     @staticmethod
@@ -452,7 +472,7 @@ class ChartGenerator:
         ]
         if not righe:
             ax.text(0.5, 0.5, 'Nessun dato disponibile\nper la tabella', ha='center',
-                    va='center', transform=ax.transAxes, fontsize=20, fontweight='bold')
+                    va='center', transform=ax.transAxes, fontsize=TESTO + 4, fontweight='bold')
             return
 
         headers = ['', 'Price', 'Var.', 'Diff.']

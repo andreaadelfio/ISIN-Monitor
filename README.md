@@ -38,11 +38,11 @@ PC spento) e manda su Telegram i cambiamenti delle proposte di MyFinance.
 - **Avvisi**: variazione rispetto all'ultimo prezzo salvato ≥ `soglia_avviso` (in su o in
   giù). Non c'è pausa fra un avviso e l'altro: è voluto. L'avviso ha i link a Fineco,
   Borsa Italiana e alla scheda in MyFinance (`<myfinance_url>/?isin=<ISIN>`).
-- **Grafici**: solo da Supabase, quattro richieste per avviso. In alto 360 giorni
-  (una chiusura al giorno, date ogni 15 giorni), 30 e 7 giorni (un prezzo ogni 15 minuti,
-  una linea per seduta su fondo grigio, senza notti e weekend); in basso Oggi (tutti i
-  prezzi di Borsa Italiana di oggi, con i punti verdi sopra l'apertura e rossi sotto) e la
-  tabella con apertura, chiusure di 1, 7, 30 e 360 giorni fa, massimo e minimo dell'anno
+- **Grafici**: solo da Supabase, quattro richieste per avviso. Immagine verticale per il
+  telefono (1200×1800): in alto, a tutta larghezza, Oggi (tutti i prezzi di Borsa Italiana
+  di oggi, con i punti verdi sopra l'apertura e rossi sotto); sotto, su due colonne, 7 e
+  30 giorni (un prezzo ogni 15 minuti, una linea per seduta su fondo grigio, senza notti e
+  weekend), 360 giorni (una chiusura al giorno) e la tabella con apertura, chiusure di 1, 7, 30 e 360 giorni fa, massimo e minimo dell'anno
   (prezzi in centesimi, variazioni fino alla prima cifra decimale significativa). Il punto
   rosso è il prezzo attuale. Ogni periodo ha il suo colore anche dentro i pannelli più
   lunghi (blu 360 giorni, verde acqua 30, arancio 7, viola oggi) e la legenda di ogni

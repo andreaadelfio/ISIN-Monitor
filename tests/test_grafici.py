@@ -123,7 +123,7 @@ def test_carico_e_operazioni_sul_grafico_annuale():
     assert len(carico) == 1 and list(carico[0].get_ydata()) == [12.0, 12.0]
     assert [len(punti) for punti in triangoli] == [1, 1]
     assert triangoli[1][0][1] == 13.0          # vendita senza prezzo: sulla chiusura del giorno
-    assert voci == ['Ultimi 360 giorni', 'Carico €12', 'Acquisto', 'Vendita']
+    assert voci == ['360 giorni', 'Carico €12', 'Acquisto', 'Vendita']
 
 
 def test_carico_lontano_solo_in_legenda():
@@ -133,7 +133,7 @@ def test_carico_lontano_solo_in_legenda():
     punteggiate = [linea for linea in asse.get_lines() if linea.get_linestyle() == ':']
     voci = [testo.get_text() for testo in asse.get_legend().get_texts()]
     plt.close(fig)
-    assert punteggiate == [] and voci == ['Ultimi 360 giorni', 'Carico €3.25 (sotto)']
+    assert punteggiate == [] and voci == ['360 giorni', 'Carico €3.25 (sotto)']
 
 
 def test_prima_cifra_decimale_significativa():
@@ -162,7 +162,7 @@ def test_legenda_con_la_variazione_del_periodo():
                                   variazione=-3.456)
     voci = legenda(asse)
     plt.close(fig)
-    assert voci == ['Ultimi 7 giorni -3.5%']
+    assert voci == ['7 giorni -3.5%']
 
 
 def test_segnale_di_myfinance():
@@ -179,7 +179,7 @@ def test_annuale_con_massimo_e_minimo():
     voci = legenda(asse)
     righe = [list(linea.get_ydata()) for linea in asse.get_lines() if linea.get_color() == '#9a9a9a']
     plt.close(fig)
-    assert voci == ['Ultimi 360 giorni', 'Max e min']
+    assert voci == ['360 giorni', 'Max e min']
     assert righe == [[60.0, 60.0], [1.0, 1.0]]
 
 
