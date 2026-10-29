@@ -3,8 +3,10 @@ from datetime import datetime, time
 import pandas as pd
 
 from core.app import chiusure_storiche
-from core.chart_generator import (ChartGenerator, asse_sedute, dati_oggi, dati_pannello,
-                                  tabella_prezzi)
+import matplotlib.pyplot as plt
+
+from core.chart_generator import (COLORI_PERIODI, SEDUTA, ChartGenerator, asse_sedute, colore_di,
+                                  dati_oggi, dati_pannello, in_orario, periodi, tabella_prezzi)
 
 ADESSO = datetime(2026, 10, 27, 15, 0)
 
@@ -49,15 +51,57 @@ def test_asse_sedute_senza_notti_e_weekend():
     ts = pd.Series(pd.to_datetime(['2026-10-23 08:55', '2026-10-23 18:05', '2026-10-26 13:30',
                                    '2026-10-27 20:00']))
     x, tick, etichette = asse_sedute(ts, time(8, 55), time(18, 5))
-    assert x[0] == 0 and abs(x[1] - 0.9) < 1e-9          # venerdì: tutta la seduta
-    assert 1 < x[2] < 1.9 and x[3] == 2.9                 # lunedì a metà, martedì oltre la chiusura
-    assert etichette == ['23/10', '26/10', '27/10'] and tick == [0.45, 1.45, 2.45]
+    assert x[0] == 0 and abs(x[1] - SEDUTA) < 1e-9       # venerdì: tutta la seduta
+    assert 1 < x[2] < 1 + SEDUTA and x[3] == 2 + SEDUTA   # lunedì a metà, martedì oltre la chiusura
+    assert etichette == ['23/10', '26/10', '27/10'] and tick == [i + SEDUTA / 2 for i in range(3)]
 
 
 def test_asse_sedute_dirada_le_etichette():
     ts = pd.Series(pd.date_range('2026-09-01 10:00', periods=22, freq='D'))
     _, _, etichette = asse_sedute(ts, time(8, 55), time(18, 5))
     assert len(etichette) <= 7 and etichette[-1] == '22/09'
+
+
+def test_fuori_orario_esclusi_dalle_sedute():
+    dati = tabella(('2026-10-23 01:00', 1), ('2026-10-23 08:55', 2), ('2026-10-23 17:36', 3),
+                   ('2026-10-23 18:05', 4), ('2026-10-27 20:32', 5))
+    assert list(in_orario(dati, time(8, 55), time(18, 5))['prezzo']) == [2, 3, 4]
+
+
+BLU, ACQUA, ARANCIO, VIOLA = COLORI_PERIODI
+
+
+def linee(asse):
+    """(colore, prezzi) delle linee disegnate, senza la linea del prezzo attuale (l'ultima)."""
+    return [(linea.get_color(), list(linea.get_ydata())) for linea in asse.get_lines()][:-1]
+
+
+def test_colori_dei_periodi():
+    elenco = periodi([7, 30, 360], ADESSO)
+    assert [giorni for giorni, _, _ in elenco] == [360, 30, 7, 0]
+    assert colore_di(pd.Timestamp('2026-09-01 10:00'), elenco) == BLU      # oltre 30 giorni
+    assert colore_di(pd.Timestamp('2026-09-27 00:00'), elenco) == ACQUA    # 30 giorni: dal 27/09
+    assert colore_di(pd.Timestamp('2026-10-20 00:00'), elenco) == ARANCIO  # 7 giorni: dal 20/10
+    assert colore_di(pd.Timestamp('2026-10-27 09:00'), elenco) == VIOLA    # oggi
+
+
+def test_una_linea_per_seduta_col_colore_del_periodo():
+    dati = tabella(('2026-10-16 10:00', 0), ('2026-10-23 09:00', 1), ('2026-10-23 17:30', 2),
+                   ('2026-10-26 12:00', 3), ('2026-10-27 09:00', 4), ('2026-10-27 15:00', 5))
+    fig, asse = plt.subplots()
+    ChartGenerator()._plot_sedute(asse, dati, 30, 5.0, periodi([7, 30, 360], ADESSO))
+    disegnate = linee(asse)
+    plt.close(fig)
+    assert disegnate == [(ACQUA, [0]), (ARANCIO, [1, 2]), (ARANCIO, [3]), (VIOLA, [4, 5])]
+
+
+def test_annuale_un_tratto_per_periodo_attaccato_al_precedente():
+    fig, asse = plt.subplots()
+    ChartGenerator()._plot_giornaliero(asse, GIORNALIERO, 360, 14.0, periodi([7, 30, 360], ADESSO))
+    disegnate = linee(asse)
+    plt.close(fig)
+    # nessuna chiusura negli ultimi 30 giorni prima del 20/10: niente tratto verde acqua
+    assert disegnate == [(BLU, [10, 11]), (ARANCIO, [11, 12, 13]), (VIOLA, [13, 14])]
 
 
 def test_chiusure_storiche_per_la_tabella():

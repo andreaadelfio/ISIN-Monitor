@@ -8,6 +8,8 @@ I dati arrivano solo dalla tabella prezzi di Supabase (vedi ISINMonitor.dati_gra
     nei giorni a PC spento;
   - giornaliero: una chiusura al giorno dell'ultimo anno.
 Pannelli: in alto 360, 30 e 7 giorni, in basso Oggi e la tabella riassuntiva.
+Ogni periodo ha un colore (blu 360 giorni, verde acqua 30, arancio 7, viola oggi) che
+resta lo stesso anche dentro i pannelli più lunghi.
 """
 
 import io
@@ -22,11 +24,17 @@ from .profiler import profile
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
+from matplotlib.lines import Line2D
 from matplotlib.ticker import FuncFormatter
 
 # Fino a quanti giorni un pannello usa i dati ogni 15 minuti (oltre, una chiusura al giorno)
 GIORNI_DETTAGLIO = 31
-BLU = '#1769aa'
+# Spazio di una seduta sull'asse a sedute: il resto, fino a 1, è lo stacco fra un giorno e l'altro
+SEDUTA = 0.8
+# Un colore per periodo, dal più lungo a oggi: blu, verde acqua, arancio, viola
+# (niente rosso e verde, che nel grafico vogliono già dire prezzo attuale, su e giù)
+COLORI_PERIODI = ['#2a78d6', '#1baf7a', '#eb6834', '#6250d6']
+FONDO_SEDUTA = '#edf1f5'
 
 
 def tabella_prezzi(righe: List[Dict]) -> pd.DataFrame:
@@ -54,6 +62,32 @@ def dati_pannello(giorni: int, recente: pd.DataFrame, giornaliero: pd.DataFrame,
     return sorgente[sorgente['ts'] >= inizio].reset_index(drop=True)
 
 
+def periodi(giorni_pannelli: List[int], adesso: datetime) -> List[tuple]:
+    """(giorni, inizio, colore) dal periodo più lungo a oggi, che ha 0 giorni.
+
+    Gli inizi sono quelli dei pannelli (vedi dati_pannello).
+    """
+    giorni = sorted(giorni_pannelli, reverse=True) + [0]
+    return [(numero, datetime.combine(adesso.date() - timedelta(days=numero), time()), colore)
+            for numero, colore in zip(giorni, COLORI_PERIODI)]
+
+
+def colore_di(istante, elenco_periodi: List[tuple]) -> str:
+    """Il colore del periodo più breve che contiene l'istante."""
+    colore = elenco_periodi[0][2]
+    for _, inizio, colore_periodo in elenco_periodi:
+        if istante >= inizio:
+            colore = colore_periodo
+    return colore
+
+
+def in_orario(dati: pd.DataFrame, apertura: time, chiusura: time) -> pd.DataFrame:
+    """Solo i punti dentro l'orario: quelli di notte (giri a mano, prove) sull'asse a sedute
+    finirebbero sul bordo e sembrerebbe che la seduta inizi o finisca lì."""
+    orari = dati['ts'].dt.time
+    return dati[(orari >= apertura) & (orari <= chiusura)].reset_index(drop=True)
+
+
 def dati_oggi(oggi: pd.DataFrame, adesso: datetime) -> pd.DataFrame:
     return oggi[oggi['ts'].dt.date == adesso.date()].reset_index(drop=True)
 
@@ -67,6 +101,7 @@ def con_prezzo_attuale(dati: pd.DataFrame, adesso: datetime, prezzo: float) -> p
 def asse_sedute(ts: pd.Series, apertura: time, chiusura: time, max_etichette: int = 7):
     """Asse X a sedute: ogni giorno con dati occupa lo stesso spazio, senza notti e weekend.
 
+    Ogni seduta (dall'apertura alla chiusura) va da `indice` a `indice + SEDUTA`.
     Restituisce le posizioni dei punti e i tick (uno per giorno, al centro della sua
     seduta, diradati se sono tanti).
     """
@@ -79,17 +114,23 @@ def asse_sedute(ts: pd.Series, apertura: time, chiusura: time, max_etichette: in
     for istante, giorno in zip(ts, giorni):
         trascorso = (istante - giorno).total_seconds() - (apertura.hour * 3600 + apertura.minute * 60)
         frazione = min(max(trascorso / durata, 0.0), 1.0)
-        x.append(posizione[giorno] + 0.9 * frazione)
+        x.append(posizione[giorno] + SEDUTA * frazione)
     passo = max(1, math.ceil(len(elenco) / max_etichette))
     # L'ultimo giorno (oggi) ha sempre l'etichetta; gli altri a ritroso ogni `passo`
     indici = list(range(len(elenco) - 1, -1, -passo))[::-1]
-    return x, [i + 0.45 for i in indici], [pd.Timestamp(elenco[i]).strftime('%d/%m') for i in indici]
+    return x, [i + SEDUTA / 2 for i in indici], [pd.Timestamp(elenco[i]).strftime('%d/%m') for i in indici]
 
 
 def _formato_euro(asse) -> None:
     asse.yaxis.set_major_formatter(
         FuncFormatter(lambda valore, _: f'€{NumberFormatter.format_number(valore)}')
     )
+
+
+def _legenda(asse, titolo: str, colore: str) -> None:
+    """Il nome del pannello, col colore del suo periodo."""
+    asse.legend(handles=[Line2D([], [], color=colore, linewidth=1.5, label=titolo)],
+                frameon=False, loc='best', fontsize=10)
 
 
 def _nessun_dato(asse, titolo: str) -> None:
@@ -149,16 +190,19 @@ class ChartGenerator:
             for spine in axis.spines.values():
                 spine.set_color('#d9dee3')
 
+        elenco = periodi(self.comparison_days, adesso)
         for index, (axis, days) in enumerate(zip(axes_top, self.comparison_days)):
             dati = dati_pannello(days, recente, giornaliero, adesso)
-            dati = con_prezzo_attuale(dati, adesso, current_price)
             if days <= GIORNI_DETTAGLIO:
-                self._plot_sedute(axis, dati, days, current_price)
+                dati = in_orario(dati, self.apertura, self.chiusura)
+                self._plot_sedute(axis, con_prezzo_attuale(dati, adesso, current_price),
+                                  days, current_price, elenco)
             else:
-                self._plot_giornaliero(axis, dati, days, current_price)
+                self._plot_giornaliero(axis, con_prezzo_attuale(dati, adesso, current_price),
+                                       days, current_price, elenco)
             if index == 2:
                 axis.yaxis.tick_right()
-        self._plot_oggi(ax_oggi, dati_oggi(oggi, adesso), adesso, current_price)
+        self._plot_oggi(ax_oggi, dati_oggi(oggi, adesso), adesso, current_price, elenco[-1][2])
         self._create_summary_table(ax_tabella, table_data=table_data)
 
         fig.suptitle(title, fontsize=18, fontweight='bold', y=0.975, color=title_color)
@@ -176,44 +220,67 @@ class ChartGenerator:
         axis.tick_params(axis='both', direction='in', labelsize=9)
         _formato_euro(axis)
 
-    def _plot_sedute(self, axis, dati: pd.DataFrame, giorni: int, current_price: float) -> None:
-        """7 e 30 giorni: linea senza marker su un asse a sedute, etichette per giorno."""
+    def _plot_sedute(self, axis, dati: pd.DataFrame, giorni: int, current_price: float,
+                     elenco: List[tuple]) -> None:
+        """7 e 30 giorni: una linea per seduta su fondo grigio, staccata dalle altre.
+
+        Il fondo va dall'apertura alla chiusura, così si vede quando iniziano e finiscono
+        i prezzi di ogni giorno. Un giorno con un prezzo solo resta un punto. Ogni seduta
+        ha il colore del periodo più breve in cui cade.
+        """
         titolo = f"Ultimi {giorni} giorni"
         if len(dati) < 2:
             _nessun_dato(axis, titolo)
             return
         x, tick, etichette = asse_sedute(dati['ts'], self.apertura, self.chiusura)
-        axis.plot(x, dati['prezzo'], color=BLU, linewidth=1.5, label=titolo)
+        sedute = dati.assign(x=x).groupby(dati['ts'].dt.normalize(), sort=False)
+        for indice, (giorno, seduta) in enumerate(sedute):
+            axis.axvspan(indice, indice + SEDUTA, color=FONDO_SEDUTA, linewidth=0, zorder=0)
+            axis.plot(seduta['x'], seduta['prezzo'], color=colore_di(giorno, elenco),
+                      linewidth=1.5, marker='o' if len(seduta) == 1 else None, markersize=3)
         axis.scatter([x[-1]], [dati['prezzo'].iloc[-1]], color='red', s=50, zorder=5,
                      edgecolor='darkred', linewidth=1.5)
         axis.set_xticks(tick)
         axis.set_xticklabels(etichette)
-        axis.set_xlim(-0.1, max(x) + 0.2)
-        axis.legend(frameon=False, loc='best', fontsize=10)
+        axis.set_xlim(-0.1, len(sedute) - 1 + SEDUTA + 0.1)
+        _legenda(axis, titolo, next(c for numero, _, c in elenco if numero == giorni))
         self._rifinisci(axis, current_price)
+        axis.grid(False, axis='x')   # le sedute si distinguono già dal fondo
 
-    def _plot_giornaliero(self, axis, dati: pd.DataFrame, giorni: int, current_price: float) -> None:
-        """Il pannello annuale: una chiusura al giorno, tick ogni 15 giorni (il 1° e il 15)."""
+    def _plot_giornaliero(self, axis, dati: pd.DataFrame, giorni: int, current_price: float,
+                          elenco: List[tuple]) -> None:
+        """Il pannello annuale: una chiusura al giorno, tick ogni 15 giorni (il 1° e il 15).
+
+        Un tratto per periodo, col suo colore, che riparte dall'ultimo punto del precedente.
+        """
         titolo = f"Ultimi {giorni} giorni"
         if len(dati) < 2:
             _nessun_dato(axis, titolo)
             return
-        axis.plot(dati['ts'], dati['prezzo'], color=BLU, linewidth=1.5, label=titolo)
+        for numero, (_, inizio, colore) in enumerate(elenco):
+            dentro = dati['ts'] >= inizio if numero else pd.Series(True, index=dati.index)
+            if numero + 1 < len(elenco):
+                dentro &= dati['ts'] < elenco[numero + 1][1]
+            if dentro.any():
+                indici = dati.index[dentro]
+                tratto = dati.loc[max(indici[0] - 1, 0):indici[-1]]
+                axis.plot(tratto['ts'], tratto['prezzo'], color=colore, linewidth=1.5)
         axis.scatter([dati['ts'].iloc[-1]], [dati['prezzo'].iloc[-1]], color='red', s=50,
                      zorder=5, edgecolor='darkred', linewidth=1.5)
         axis.xaxis.set_major_locator(mdates.DayLocator(bymonthday=[1, 15]))
         axis.xaxis.set_major_formatter(mdates.DateFormatter('%d/%m'))
         axis.set_xlim(dati['ts'].iloc[0], dati['ts'].iloc[-1] + timedelta(days=3))
-        axis.legend(frameon=False, loc='best', fontsize=10)
+        _legenda(axis, titolo, next(c for numero, _, c in elenco if numero == giorni))
         self._rifinisci(axis, current_price)
         axis.tick_params(axis='x', labelsize=7, labelrotation=90, pad=2)
 
-    def _plot_oggi(self, axis, oggi: pd.DataFrame, adesso: datetime, current_price: float) -> None:
+    def _plot_oggi(self, axis, oggi: pd.DataFrame, adesso: datetime, current_price: float,
+                   colore: str) -> None:
         """Oggi: tutti i prezzi di Borsa Italiana con i marker (verdi sopra l'apertura, rossi sotto)."""
         dati = con_prezzo_attuale(oggi, adesso, current_price)
         apertura = dati['prezzo'].iloc[0]
         colori = ['green' if prezzo >= apertura else 'red' for prezzo in dati['prezzo']]
-        axis.plot(dati['ts'], dati['prezzo'], color='#173fbd', linewidth=1.5, label='Oggi')
+        axis.plot(dati['ts'], dati['prezzo'], color=colore, linewidth=1.5, label='Oggi')
         axis.scatter(dati['ts'], dati['prezzo'], c=colori, s=14, alpha=0.8)
         axis.scatter([dati['ts'].iloc[0]], [apertura], color='green', s=70, marker='^', zorder=5)
         axis.scatter([dati['ts'].iloc[-1]], [dati['prezzo'].iloc[-1]], color='red', s=70,
