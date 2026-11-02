@@ -12,6 +12,10 @@ from datetime import datetime
 import time
 from .profiler import profile
 
+# Un titolo senza scheda su Borsa Italiana (ISIN sbagliato o non quotato a Milano) si
+# riprova dopo questi secondi, invece che a ogni giro: meno richieste e meno righe nel log
+RIPROVA_SENZA_SCHEDA = 600
+
 
 class BorsaItalianaProvider:
     """Prezzo in tempo reale dalla scheda del titolo su Borsa Italiana (per ISIN)."""
@@ -24,6 +28,8 @@ class BorsaItalianaProvider:
         self._url_finale: Dict[str, str] = {}
         # True dopo una risposta 429: Borsa Italiana chiede di rallentare
         self.troppe_richieste = False
+        # ISIN senza scheda -> quando riprovarli (time.monotonic())
+        self._senza_scheda: Dict[str, float] = {}
 
     @profile()
     def get_price(self, isin: str) -> Tuple[Optional[float], Optional[str]]:
@@ -33,7 +39,9 @@ class BorsaItalianaProvider:
 
     def _fetch_data_for_isin(self, isin: str) -> Tuple[Optional[float], Optional[str], Optional[datetime]]:
         """Recupera prezzo e nome azienda per un ISIN in una singola richiesta."""
-        
+        if self._senza_scheda.get(isin, 0) > time.monotonic():
+            return None, None, None
+
         markets = [
             ("italiano", f"https://www.borsaitaliana.it/borsa/azioni/scheda/{isin}.html"),
             ("globale", f"https://www.borsaitaliana.it/borsa/azioni/global-equity-market/scheda/{isin}.html")
@@ -41,7 +49,9 @@ class BorsaItalianaProvider:
         if isin in self._url_finale:
             markets.insert(0, ("ultima pagina", self._url_finale[isin]))
         errori = []
-        
+        # True se nessuna pagina ha la scheda del titolo (404 o rimando al listino A-Z)
+        definitivo = True
+
         headers = {
             'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36'
         }
@@ -62,15 +72,32 @@ class BorsaItalianaProvider:
                     if price is not None:
                         self._url_finale[isin] = response.url
                         return price, company_name, datetime.now()
-                    errori.append(f"{market_type}: prezzo non trovato")
+                    if '/scheda/' in response.url:
+                        errori.append(f"{market_type}: prezzo non trovato")
+                        definitivo = False
+                    else:
+                        # Un ISIN sconosciuto finisce sul listino A-Z
+                        errori.append(f"{market_type}: nessuna scheda")
                 else:
                     errori.append(f"{market_type}: status {response.status_code}")
-                    
+                    if response.status_code != 404:
+                        # Errore del server: le altre pagine non andrebbero meglio
+                        definitivo = False
+                        break
+
             except Exception as e:
+                # Rete giù o timeout: provare le altre pagine costerebbe altri timeout
                 errori.append(f"{market_type}: {e.__class__.__name__}")
-                continue
-        
-        print(f"❌ Nessun prezzo per ISIN {isin} ({'; '.join(errori)})")
+                definitivo = False
+                break
+
+        if definitivo:
+            # Nessuna scheda (non un problema di rete o della pagina): si riprova più tardi
+            self._senza_scheda[isin] = time.monotonic() + RIPROVA_SENZA_SCHEDA
+            print(f"❌ Nessun prezzo per ISIN {isin} ({'; '.join(errori)}): "
+                  f"riprovo fra {RIPROVA_SENZA_SCHEDA // 60} minuti")
+        else:
+            print(f"❌ Nessun prezzo per ISIN {isin} ({'; '.join(errori)})")
         return None, None, None
 
     def _extract_price_from_html(self, html_content):
@@ -217,7 +244,10 @@ class YahooFinanceProvider:
                 return self._result_to_frame(result[0])
             except (requests.RequestException, ValueError, KeyError, TypeError) as error:
                 last_error = error
-                if attempt < self.max_retries:
+                # Simbolo sbagliato o sconosciuto (404 e simili): riprovare non serve
+                rifiutato = (isinstance(error, requests.HTTPError) and error.response is not None
+                             and 400 <= error.response.status_code < 500)
+                if attempt < self.max_retries and not rifiutato:
                     time.sleep(2 ** attempt)
                     continue
                 break

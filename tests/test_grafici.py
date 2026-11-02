@@ -198,3 +198,17 @@ def test_grafico_anche_senza_dati():
     png = ChartGenerator([7, 30, 360]).create_comprehensive_chart(
         'Titolo', 10.0, 9.5, None, tabella(('2026-10-27 09:00', 9.6)), RECENTE, GIORNALIERO, ADESSO)
     assert png.startswith(b'\x89PNG')
+
+
+def test_figura_chiusa_anche_se_il_disegno_fallisce(monkeypatch):
+    import pytest
+
+    def rotta(*args, **kwargs):
+        raise ValueError('disegno fallito')
+
+    monkeypatch.setattr(ChartGenerator, '_create_summary_table', rotta)
+    plt.close('all')
+    with pytest.raises(ValueError):
+        ChartGenerator().create_comprehensive_chart('Prova', 4.0, None, [], RECENTE.iloc[-1:],
+                                                    RECENTE, GIORNALIERO, ADESSO)
+    assert plt.get_fignums() == []

@@ -277,64 +277,67 @@ class ChartGenerator:
         # Oggi a tutta larghezza; sotto, su due colonne, i periodi dal più breve e la tabella.
         # Il pannello della colonna di destra ha i prezzi a destra
         fig = plt.figure(figsize=(LARGHEZZA, ALTEZZA), facecolor='white')
-        griglia = fig.add_gridspec(3, 2, hspace=0.2, wspace=0.05)
-        fig.subplots_adjust(top=0.905, bottom=0.035, left=0.13, right=0.87)
-        ax_oggi = fig.add_subplot(griglia[0, :])
-        celle = [griglia[1, 0], griglia[1, 1], griglia[2, 0]]   # dal periodo più breve
-        numero = len(self.comparison_days)
-        # comparison_days va dal più lungo: il più lungo nell'ultima cella
-        axes_top = [fig.add_subplot(celle[numero - 1 - indice]) for indice in range(numero)]
-        a_destra = [celle[numero - 1 - indice] is celle[1] for indice in range(numero)]
-        ax_tabella = fig.add_subplot(griglia[2, 1])
-        # La tabella non ha l'asse dei prezzi: arriva fino al bordo destro
-        posizione = ax_tabella.get_position()
-        ax_tabella.set_position([posizione.x0, posizione.y0, 0.975 - posizione.x0,
-                                 posizione.height])
-        for axis in [*axes_top, ax_oggi, ax_tabella]:
-            axis.set_facecolor('white')
-            for spine in axis.spines.values():
-                spine.set_color('#d9dee3')
+        # Chiusa anche se il disegno fallisce: il processo resta acceso tutto il giorno
+        try:
+            griglia = fig.add_gridspec(3, 2, hspace=0.2, wspace=0.05)
+            fig.subplots_adjust(top=0.905, bottom=0.035, left=0.13, right=0.87)
+            ax_oggi = fig.add_subplot(griglia[0, :])
+            celle = [griglia[1, 0], griglia[1, 1], griglia[2, 0]]   # dal periodo più breve
+            numero = len(self.comparison_days)
+            # comparison_days va dal più lungo: il più lungo nell'ultima cella
+            axes_top = [fig.add_subplot(celle[numero - 1 - indice]) for indice in range(numero)]
+            a_destra = [celle[numero - 1 - indice] is celle[1] for indice in range(numero)]
+            ax_tabella = fig.add_subplot(griglia[2, 1])
+            # La tabella non ha l'asse dei prezzi: arriva fino al bordo destro
+            posizione = ax_tabella.get_position()
+            ax_tabella.set_position([posizione.x0, posizione.y0, 0.975 - posizione.x0,
+                                     posizione.height])
+            for axis in [*axes_top, ax_oggi, ax_tabella]:
+                axis.set_facecolor('white')
+                for spine in axis.spines.values():
+                    spine.set_color('#d9dee3')
 
-        elenco = periodi(self.comparison_days, adesso)
-        for axis, days, destra in zip(axes_top, self.comparison_days, a_destra):
-            dati = dati_pannello(days, recente, giornaliero, adesso)
-            variazione = variazione_di(table_data, f'{days}gg')
-            if variazione is None and not dati.empty:
-                variazione = (current_price / dati['prezzo'].iloc[0] - 1) * 100
-            if days <= GIORNI_DETTAGLIO:
-                dati = in_orario(dati, self.apertura, self.chiusura)
-                self._plot_sedute(axis, con_prezzo_attuale(dati, adesso, current_price),
-                                  days, current_price, elenco, carico, segni or [], variazione)
-            else:
-                dati = con_prezzo_attuale(dati, adesso, current_price)
-                estremi = [riga['price'] for riga in (riga_di(table_data, 'Max'),
-                                                      riga_di(table_data, 'Min')) if riga]
-                self._plot_giornaliero(axis, dati, days, current_price, elenco, carico, segni or [],
-                                       variazione, estremi or [dati['prezzo'].max(), dati['prezzo'].min()])
-            if destra:
-                axis.yaxis.tick_right()
-        self._plot_oggi(ax_oggi, dati_oggi(oggi, adesso), adesso, current_price, elenco[-1][2],
-                        carico, variazione_di(table_data, 'Open'))
-        self._create_summary_table(ax_tabella, table_data=table_data)
+            elenco = periodi(self.comparison_days, adesso)
+            for axis, days, destra in zip(axes_top, self.comparison_days, a_destra):
+                dati = dati_pannello(days, recente, giornaliero, adesso)
+                variazione = variazione_di(table_data, f'{days}gg')
+                if variazione is None and not dati.empty:
+                    variazione = (current_price / dati['prezzo'].iloc[0] - 1) * 100
+                if days <= GIORNI_DETTAGLIO:
+                    dati = in_orario(dati, self.apertura, self.chiusura)
+                    self._plot_sedute(axis, con_prezzo_attuale(dati, adesso, current_price),
+                                      days, current_price, elenco, carico, segni or [], variazione)
+                else:
+                    dati = con_prezzo_attuale(dati, adesso, current_price)
+                    estremi = [riga['price'] for riga in (riga_di(table_data, 'Max'),
+                                                          riga_di(table_data, 'Min')) if riga]
+                    self._plot_giornaliero(axis, dati, days, current_price, elenco, carico, segni or [],
+                                           variazione, estremi or [dati['prezzo'].max(), dati['prezzo'].min()])
+                if destra:
+                    axis.yaxis.tick_right()
+            self._plot_oggi(ax_oggi, dati_oggi(oggi, adesso), adesso, current_price, elenco[-1][2],
+                            carico, variazione_di(table_data, 'Open'))
+            self._create_summary_table(ax_tabella, table_data=table_data)
 
-        # In alto il nome; sotto prezzo e ora (colorati se il prezzo è salito o sceso) e,
-        # a destra, il segnale di MyFinance
-        fig.text(0.03, 0.988, nome, ha='left', va='top', fontsize=TESTO + 5, fontweight='bold')
-        fig.text(0.03, 0.952, f'€{NumberFormatter.format_number(current_price)} · '
-                 f'{adesso.strftime("%H:%M:%S")}', ha='left', va='top', fontsize=TESTO + 4,
-                 fontweight='bold', color=title_color)
-        badge = etichetta_segnale(segnale, punteggio)
-        if badge:
-            fondo, inchiostro = COLORI_SEGNALI[segnale]
-            fig.text(0.975, 0.949, badge, ha='right', va='top', fontsize=TESTO - 1,
-                     fontweight='bold', color=inchiostro,
-                     bbox=dict(boxstyle='round,pad=0.4', facecolor=fondo, edgecolor='none'))
+            # In alto il nome; sotto prezzo e ora (colorati se il prezzo è salito o sceso) e,
+            # a destra, il segnale di MyFinance
+            fig.text(0.03, 0.988, nome, ha='left', va='top', fontsize=TESTO + 5, fontweight='bold')
+            fig.text(0.03, 0.952, f'€{NumberFormatter.format_number(current_price)} · '
+                     f'{adesso.strftime("%H:%M:%S")}', ha='left', va='top', fontsize=TESTO + 4,
+                     fontweight='bold', color=title_color)
+            badge = etichetta_segnale(segnale, punteggio)
+            if badge:
+                fondo, inchiostro = COLORI_SEGNALI[segnale]
+                fig.text(0.975, 0.949, badge, ha='right', va='top', fontsize=TESTO - 1,
+                         fontweight='bold', color=inchiostro,
+                         bbox=dict(boxstyle='round,pad=0.4', facecolor=fondo, edgecolor='none'))
 
-        img_buffer = io.BytesIO()
-        fig.savefig(img_buffer, format='png', dpi=DPI, facecolor='white',
-                    edgecolor='none', pil_kwargs={'compress_level': 6})
-        plt.close(fig)
-        return img_buffer.getvalue()
+            img_buffer = io.BytesIO()
+            fig.savefig(img_buffer, format='png', dpi=DPI, facecolor='white',
+                        edgecolor='none', pil_kwargs={'compress_level': 6})
+            return img_buffer.getvalue()
+        finally:
+            plt.close(fig)
 
     def _rifinisci(self, axis, current_price: float) -> None:
         """Parti comuni dei pannelli: linea del prezzo attuale, griglia, tick, euro."""

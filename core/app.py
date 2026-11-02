@@ -16,7 +16,7 @@ Yahoo i buchi dello storico e manda i cambiamenti delle proposte di MyFinance.
 import queue
 import threading
 import time
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import Dict, List, Optional, Tuple
 from zoneinfo import ZoneInfo
 
@@ -36,6 +36,13 @@ MYFINANCE_URL = 'https://andreaadelfiomyfinance.pages.dev'
 TOKEN_ESEMPIO = '123456789:ABCdefGHIjklMNOpqrsTUVwxyz-1234567890'
 # Prezzi tenuti da parte se Supabase non risponde (circa una giornata di controlli)
 MAX_IN_SOSPESO = 50000
+# Risposte di Supabase per dati sbagliati: quei prezzi si buttano. Con gli altri errori
+# (rete, 5xx, chiave sbagliata o revocata, troppe richieste) aspettano in locale
+RIFIUTATI = (400, 409, 422)
+# Variazione in % (rispetto all'ultimo prezzo salvato) da confermare al giro dopo
+SALTO_SOSPETTO = 20
+# Attesa massima chiesta da Telegram (retry_after) per riprovare un invio
+MAX_ATTESA_TELEGRAM = 120
 # Pausa dopo una risposta 429 (troppe richieste) di Borsa Italiana
 PAUSA_429 = 60
 
@@ -53,7 +60,6 @@ def titolo_da_riga(riga: Dict) -> Dict:
         'soglia': float(soglia) if soglia is not None else 0.5,
         'ultimo_prezzo': float(ultimo['prezzo']) if ultimo else None,
         'ultimo_ts': ultimo['ts'] if ultimo else None,
-        'senza_storico': ultimo is None,
         # L'analisi serale di MyFinance (niente segnale se l'analisi è andata in errore)
         'segnale': None if riga.get('errore') else riga.get('segnale'),
         'punteggio': riga.get('punteggio'),
@@ -83,11 +89,14 @@ class ISINMonitor:
 
         self.db = Database.da_configurazione(config)
         self.online = False  # True se la lista dei titoli è arrivata da Supabase
+        self.irraggiungibile = False  # True se in questo giro Supabase non ha risposto (rete)
         timeout = config.get('api', {}).get('request_timeout', 10)
         self.borsa = BorsaItalianaProvider(timeout)
         self.yahoo = YahooFinanceProvider(config.get('yahoo', {}))
         self.myfinance_url = config.get('myfinance_url', MYFINANCE_URL)
         self._chart_generator = None
+        self.ultimo_mattino: Optional[str] = None  # giorno dei lavori del mattino prima di oggi
+        self._sospetti: Dict[str, float] = {}  # ISIN -> prezzo con un salto da confermare
 
     @property
     def chart_generator(self):
@@ -107,21 +116,26 @@ class ISINMonitor:
     def carica_titoli(self) -> List[Dict]:
         """La watchlist da Supabase (salvata anche in locale); se non risponde, l'ultima salvata."""
         self.online = False
+        self.irraggiungibile = False
         if self.db:
             try:
                 titoli = [titolo_da_riga(riga) for riga in self.db.titoli()]
                 self.online = True
             except ErroreDatabase as errore:
                 print(f"⚠️ {errore}")
+                self.irraggiungibile = errore.status is None
         if not self.online:
             titoli = stato.leggi('titoli.json', [])
             print(f"⚠️ Uso l'ultima lista salvata ({len(titoli)} titoli)")
             return titoli
 
-        # I prezzi non ancora scritti nel database sono più recenti dell'ultimo salvato
+        # I prezzi non ancora scritti nel database sono più recenti dell'ultimo salvato.
+        # Le ore si confrontano come date: Supabase le dà in UTC, il monitor con il fuso di Roma
         for riga in stato.leggi('prezzi_in_sospeso.json', []):
             for titolo in titoli:
-                if titolo['isin'] == riga['isin'] and (titolo['ultimo_ts'] or '') < riga['ts']:
+                if titolo['isin'] == riga['isin'] and (
+                        not titolo['ultimo_ts']
+                        or datetime.fromisoformat(titolo['ultimo_ts']) < datetime.fromisoformat(riga['ts'])):
                     titolo['ultimo_prezzo'], titolo['ultimo_ts'] = riga['prezzo'], riga['ts']
         stato.scrivi('titoli.json', titoli)
         return titoli
@@ -134,7 +148,8 @@ class ISINMonitor:
         righe = in_sospeso + nuovi
         if not righe:
             return
-        if self.db:
+        # Se Supabase non ha risposto per la lista, la scrittura aspetterebbe un altro timeout
+        if self.db and not self.irraggiungibile:
             try:
                 self.db.scrivi_prezzi(righe)
                 if in_sospeso:
@@ -143,8 +158,8 @@ class ISINMonitor:
                 return
             except ErroreDatabase as errore:
                 print(f"❌ {errore}")
-                if errore.status is not None and errore.status < 500:
-                    # Rifiutati (non un problema di rete): riprovarli non servirebbe
+                if errore.status in RIFIUTATI:
+                    # Rifiutati i dati: riprovarli non servirebbe
                     stato.scrivi('prezzi_in_sospeso.json', [])
                     return
         stato.scrivi('prezzi_in_sospeso.json', righe[-MAX_IN_SOSPESO:])
@@ -158,15 +173,18 @@ class ISINMonitor:
         """
         self.borsa.troppe_richieste = False
         passo = durata / len(titoli)
-        inizio = time.monotonic()
+        prossima = time.monotonic()
         letture = []
-        for indice, titolo in enumerate(titoli):
+        for titolo in titoli:
             if self.borsa.troppe_richieste:
                 letture.append((None, None))
                 continue
-            attesa = inizio + indice * passo - time.monotonic()
+            attesa = prossima - time.monotonic()
             if attesa > 0:
                 time.sleep(attesa)
+            # Il passo conta dall'inizio di questa richiesta: dopo una risposta lenta le
+            # richieste dopo restano distanziate (il giro dura di più) invece di partire a raffica
+            prossima = time.monotonic() + passo
             prezzo, _ = self.borsa.get_price(titolo['isin'])
             letture.append((prezzo, datetime.now(ROMA).replace(microsecond=0)))
         if self.borsa.troppe_richieste:
@@ -186,6 +204,15 @@ class ISINMonitor:
         avviso = None
         if precedente:
             variazione = (prezzo - precedente) / precedente * 100
+            # Un salto enorme può essere un prezzo letto male: si salva (e si avvisa) solo
+            # se il giro dopo lo conferma, così un errore non resta nello storico
+            sospetto = self._sospetti.pop(titolo['isin'], None)
+            if abs(variazione) > SALTO_SOSPETTO and not (
+                    sospetto and abs(prezzo / sospetto - 1) * 100 <= SALTO_SOSPETTO / 4):
+                self._sospetti[titolo['isin']] = prezzo
+                print(f"⚠️ {titolo['nome']}: {precedente:g} → {prezzo:g} ({variazione:+.1f}%), "
+                      f"lo salvo solo se il prossimo giro lo conferma")
+                return None, None
             if abs(variazione) >= soglia:
                 direzione = "aumento" if variazione > 0 else "calo"
                 print(f"🎯 VARIAZIONE SIGNIFICATIVA! {titolo['nome']} - {direzione}: {abs(variazione):.2f}%")
@@ -230,10 +257,15 @@ class ISINMonitor:
         return titoli, avvisi
 
     def mattino_da_fare(self) -> bool:
-        """True al primo giro del giorno con Supabase raggiungibile (e lo segna come fatto)."""
+        """True al primo giro del giorno con Supabase raggiungibile (e lo segna come fatto).
+
+        In self.ultimo_mattino resta il giorno dei lavori del mattino precedenti.
+        """
         oggi = datetime.now(ROMA).date().isoformat()
-        if not self.online or stato.leggi('mattino.json', {}).get('giorno') == oggi:
+        prima = stato.leggi('mattino.json', {}).get('giorno')
+        if not self.online or prima == oggi:
             return False
+        self.ultimo_mattino = prima
         stato.scrivi('mattino.json', {'giorno': oggi})
         return True
 
@@ -390,17 +422,41 @@ class ISINMonitor:
         print("🌅 Primo avvio di oggi: riempio i buchi dello storico e controllo le proposte")
         if self.config.get('yahoo', {}).get('enabled', True):
             adesso = datetime.now(ROMA)
-            for titolo in titoli:
-                # Un titolo appena aggiunto (nessun prezzo prima di oggi) ha l'anno intero
-                passi = storico.COMPLETO if titolo.get('senza_storico') else storico.GIORNALIERO
-                try:
-                    storico.riempi_titolo(self.db, self.yahoo, titolo, passi, adesso)
-                except ErroreDatabase as errore:
-                    print(f"⚠️ {titolo['isin']}: {errore}")
+            # Più di 6 giorni senza monitor (vacanze): i 7 giorni al minuto non bastano
+            prima = self.ultimo_mattino
+            lontano = prima is not None and (adesso.date() - date.fromisoformat(prima)).days > 6
+            if lontano:
+                print(f"🧳 Ultimo avvio il {prima}: riempio tutto lo storico, non solo 7 giorni")
+            self.riempi_buchi(titoli, adesso, completo=lontano)
         try:
             self.controlla_proposte()
         except ErroreDatabase as errore:
             print(f"⚠️ Proposte non controllate: {errore}")
+
+    def riempi_buchi(self, titoli: List[Dict], adesso: datetime, completo: bool = False,
+                     scrivi: bool = True) -> int:
+        """Buchi dello storico con Yahoo: gli ultimi 7 giorni, o l'anno intero (`completo`).
+
+        Ogni titolo ha l'anno intero una volta (anche se aggiunto in giornata, o se cambia
+        simbolo_borsa): i titoli già riempiti sono in storico_completo.json.
+        """
+        completi = set(stato.leggi('storico_completo.json', []))
+        totale = 0
+        for titolo in titoli:
+            chiave = f"{titolo['isin']} {storico.simbolo_yahoo(titolo)}"
+            intero = completo or chiave not in completi
+            try:
+                aggiunti = storico.riempi_titolo(
+                    self.db, self.yahoo, titolo,
+                    storico.COMPLETO if intero else storico.GIORNALIERO, adesso, scrivi)
+            except ErroreDatabase as errore:
+                print(f"⚠️ {titolo['isin']}: {errore}")
+                continue
+            totale += aggiunti or 0
+            if intero and aggiunti is not None and scrivi:
+                completi.add(chiave)
+        stato.scrivi('storico_completo.json', sorted(completi))
+        return totale
 
     def controlla_proposte(self) -> None:
         """Manda su Telegram i cambiamenti di segnale e proposta del giorno, se ce ne sono."""
@@ -460,9 +516,7 @@ class ISINMonitor:
         if not self.online:
             print("❌ Serve Supabase per riempire lo storico")
             return
-        adesso = datetime.now(ROMA)
-        totale = sum(storico.riempi_titolo(self.db, self.yahoo, titolo, storico.COMPLETO,
-                                           adesso, scrivi) for titolo in titoli)
+        totale = self.riempi_buchi(titoli, datetime.now(ROMA), completo=True, scrivi=scrivi)
         print(f"✅ {totale} punti Yahoo {'aggiunti' if scrivi else 'da aggiungere (prova)'}")
 
     def test_telegram(self) -> None:
@@ -501,19 +555,27 @@ class ISINMonitor:
         if not self.config['telegram'].get('chat_id'):
             print("ERRORE: Chat ID Telegram non configurato!")
             return False
-        try:
-            # Timeout più alto per l'upload delle foto
-            timeout = max(self.config.get('api', {}).get('request_timeout', 10), 30)
-            # Senza sessione condivisa: lo chiamano sia il thread degli avvisi sia quello del mattino
-            risposta = requests.post(
-                f"https://api.telegram.org/bot{self.bot_token}/{metodo}", timeout=timeout, **kwargs
-            )
-            dati = risposta.json()
-        except (requests.RequestException, ValueError) as errore:
-            # Il messaggio di requests contiene l'URL con il token: non si stampa
-            print(f"ERRORE: Telegram non raggiungibile ({errore.__class__.__name__})")
-            return False
-        if not dati.get('ok', False):
-            print(f"ERRORE: Errore nell'invio Telegram: {dati.get('description', 'sconosciuto')}")
-            return False
-        return True
+        # Timeout più alto per l'upload delle foto
+        timeout = max(self.config.get('api', {}).get('request_timeout', 10), 30)
+        for tentativo in range(2):
+            try:
+                # Senza sessione condivisa: lo chiamano sia il thread degli avvisi sia quello del mattino
+                risposta = requests.post(
+                    f"https://api.telegram.org/bot{self.bot_token}/{metodo}", timeout=timeout, **kwargs
+                )
+                dati = risposta.json()
+            except (requests.RequestException, ValueError) as errore:
+                # Il messaggio di requests contiene l'URL con il token: non si stampa
+                print(f"ERRORE: Telegram non raggiungibile ({errore.__class__.__name__})")
+                return False
+            if dati.get('ok', False):
+                return True
+            # Troppi messaggi insieme (es. tanti avvisi all'apertura): Telegram dice quanto aspettare
+            attesa = (dati.get('parameters') or {}).get('retry_after')
+            if attesa and tentativo == 0 and attesa <= MAX_ATTESA_TELEGRAM:
+                print(f"⏸️ Telegram: troppi messaggi, riprovo fra {attesa} s")
+                time.sleep(attesa)
+                continue
+            break
+        print(f"ERRORE: Errore nell'invio Telegram: {dati.get('description', 'sconosciuto')}")
+        return False

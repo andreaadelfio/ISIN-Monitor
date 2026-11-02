@@ -11,13 +11,15 @@ nessun prezzo salvato: lì si aggiungono i punti di Yahoo con fonte 'yahoo'.
     giorni ai 5 minuti, l'anno prima con una chiusura al giorno;
   - ogni mattina, al primo avvio: gli ultimi 7 giorni al minuto (copre il giorno
     prima e i giorni a PC spento; ai 5 minuti solo se Yahoo non ha il dato al minuto,
-    come per i titoli americani quotati a Milano), il completo per i titoli senza prezzi.
+    come per i titoli americani quotati a Milano); il completo, una volta, per ogni titolo
+    (o simbolo_borsa) nuovo, e per tutti dopo più di 6 giorni senza monitor:
+    i titoli già fatti sono in storico_completo.json.
 
 Oggi non si riempie mai: i prezzi di oggi arrivano da Borsa Italiana.
 """
 
 from datetime import datetime, timedelta, timezone
-from typing import Dict, List, Set
+from typing import Dict, List, Optional, Set
 from zoneinfo import ZoneInfo
 
 import pandas as pd
@@ -80,12 +82,16 @@ def punti_mancanti(serie: pd.DataFrame, occupati: Set[datetime], passo: timedelt
 
 
 def riempi_titolo(db, yahoo, titolo: Dict, passi: List[tuple], adesso: datetime,
-                  scrivi: bool = True) -> int:
-    """Riempie i buchi di un titolo, un passo alla volta; restituisce i punti aggiunti."""
+                  scrivi: bool = True) -> Optional[int]:
+    """Riempie i buchi di un titolo, un passo alla volta.
+
+    Restituisce i punti aggiunti, o None se Yahoo non ha dato niente (manca il simbolo,
+    Yahoo non risponde o non ha dati): allora il riempimento va rifatto più avanti.
+    """
     simbolo = simbolo_yahoo(titolo)
     if not simbolo:
         print(f"⏭️ {titolo['isin']}: manca simbolo_borsa (il simbolo Yahoo in euro), salto")
-        return 0
+        return None
 
     fino_a = adesso.astimezone(ROMA).replace(hour=0, minute=0, second=0, microsecond=0)
     aggiunti = []  # anche senza scrivere, i passi dopo non devono ricontarli
@@ -114,4 +120,4 @@ def riempi_titolo(db, yahoo, titolo: Dict, passi: List[tuple], adesso: datetime,
         print(f"📥 {simbolo} {intervallo}: {len(punti)} punti Yahoo "
               f"{'aggiunti' if scrivi else 'da aggiungere'} su {len(serie)}")
         aggiunti.extend(punti)
-    return len(aggiunti)
+    return len(aggiunti) if con_dati else None

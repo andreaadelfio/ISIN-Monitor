@@ -28,15 +28,15 @@ PC spento) e manda su Telegram i cambiamenti delle proposte di MyFinance.
   è salvata anche in `~/.local/state/isin-monitor/titoli.json`: se Supabase non risponde,
   il monitor continua con quella.
 - **Prezzi**: Borsa Italiana, scheda del titolo per ISIN (dopo la prima lettura il monitor
-  ricorda l'indirizzo finale della pagina, così ogni titolo costa una richiesta sola). Un
-  prezzo si salva solo se è cambiato; tutti i prezzi nuovi di un giro vanno nel database
-  con una sola scrittura
-  (tabella `prezzi`, fonte `borsa`). Se Supabase non risponde restano in
+  ricorda l'indirizzo finale della pagina, così ogni titolo costa una richiesta sola). Un prezzo si salva solo se è cambiato; tutti i prezzi
+  nuovi di un giro vanno nel database con una sola scrittura (tabella `prezzi`, fonte
+  `borsa`). Se Supabase non risponde restano in
   `~/.local/state/isin-monitor/prezzi_in_sospeso.json` e partono al giro dopo. Titoli
   poco scambiati a Milano (BNP, i titoli americani prima dell'apertura di New York) hanno
   pochi punti al giorno: il prezzo cambia solo quando c'è un contratto.
 - **Avvisi**: variazione rispetto all'ultimo prezzo salvato ≥ `soglia_avviso` (in su o in
-  giù). Non c'è pausa fra un avviso e l'altro: è voluto. L'avviso ha i link a Fineco,
+  giù). Non c'è pausa fra un avviso e l'altro: è voluto. Un salto di più del 20% (spesso un
+  prezzo letto male) si salva e si avvisa solo se il giro dopo lo conferma. L'avviso ha i link a Fineco,
   Borsa Italiana e alla scheda in MyFinance (`<myfinance_url>/?isin=<ISIN>`).
 - **Grafici**: solo da Supabase, quattro richieste per avviso. Immagine verticale per il
   telefono (1200×1800): in alto, a tutta larghezza, Oggi (tutti i prezzi di Borsa Italiana
@@ -96,6 +96,12 @@ da `market_open_time`/`market_close_time` di `config.json` (con 08:55-18:05:
 cambi gli orari, rilancia `./setup.sh install`. Lanciato a mano fuori orario,
 `monitor.py` esce subito, prima di caricare pandas e matplotlib.
 
+Nei giorni feriali in cui Borsa Italiana è chiusa (Capodanno, Venerdì Santo, Pasquetta,
+1° maggio, 24, 25, 26 e 31 dicembre; vedi `festivo` in `core/orario.py`) il monitor
+scrive "Borsa Italiana chiusa oggi" e resta acceso senza fare niente fino alla chiusura,
+così il timer non lo rilancia ogni 15 secondi. Le altre feste italiane (6 gennaio,
+25 aprile, 2 giugno, Ferragosto, 1° novembre, 8 dicembre) sono giorni di borsa aperta.
+
 ## Comandi
 
 ```bash
@@ -124,7 +130,7 @@ python3 monitor.py --giro --ignora-orario      # un giro solo, anche fuori orari
 | `api.request_timeout` | timeout delle richieste |
 | `yahoo.enabled`, `timeout`, `max_retries` | riempimento dei buchi con Yahoo |
 | `supabase.url` | progetto Supabase di MyFinance |
-| `test` | `true`: `--monitor` fa il test del primo titolo |
+| `test` | `true`: `--monitor` fa il test del primo titolo (un avviso) e poi resta fermo fino alla chiusura |
 
 ## Storico con Yahoo
 
@@ -136,8 +142,12 @@ mai per oggi.
 - Una tantum (`./setup.sh riempi-storico`): ultimi 7 giorni al minuto, fino a 60 giorni ai
   5 minuti, l'anno prima una chiusura al giorno (salvata alle 17:30).
 - Ogni mattina, al primo avvio: gli ultimi 7 giorni al minuto (ai 5 minuti se Yahoo non ha
-  il minuto, come per i titoli americani quotati a Milano); per un titolo appena aggiunto
-  senza nessun prezzo, il riempimento completo.
+  il minuto, come per i titoli americani quotati a Milano). Ogni titolo nuovo (anche
+  aggiunto in giornata) o con un `simbolo_borsa` nuovo ha una volta il riempimento
+  completo, la mattina dopo; quelli già fatti sono in
+  `~/.local/state/isin-monitor/storico_completo.json` (cancellalo per rifarli tutti).
+  Dopo più di 6 giorni senza monitor (vacanze, PC spento) il primo mattino fa il
+  riempimento completo per tutti i titoli: i 7 giorni al minuto non basterebbero.
 
 Yahoo usa `simbolo_borsa`; senza, il `simbolo` solo se il titolo è quotato in euro (i
 prezzi in dollari rovinerebbero lo storico).
@@ -200,10 +210,12 @@ tests/                test (pytest)
 - **"Uso l'ultima lista salvata"**: Supabase non risponde; i prezzi aspettano in locale e
   partono appena torna. Un `401` vuol dire chiave sbagliata o revocata.
 - **"Nessun prezzo per ..."**: Borsa Italiana non ha la scheda di quell'ISIN (titolo non
-  quotato a Milano o ISIN cambiato): correggi l'ISIN dal sito.
+  quotato a Milano o ISIN cambiato): correggi l'ISIN dal sito. Finché la scheda non
+  c'è, il monitor la richiede ogni 10 minuti invece che a ogni giro.
 - **"Borsa Italiana: troppe richieste (429)"**: Borsa Italiana limita le richieste; il
-  monitor fa una pausa di 60 secondi e riprende. Non lanciare altri `--giro` o prove mentre
-  il servizio gira: le richieste si sommano.
+  monitor fa una pausa di 60 secondi e riprende. Un `--giro` o un secondo `--monitor`
+  lanciati mentre il servizio gira escono subito ("Un altro monitor sta già girando"):
+  le richieste si sommerebbero. `./setup.sh test` (una richiesta sola) si può usare.
 - **Nessun avviso**: guarda `./setup.sh logs`; fuori orario il timer non parte;
   `./setup.sh test` prova Telegram con un avviso vero.
 - **Grafici vuoti o con buchi**: `./setup.sh riempi-storico --prova` dice quanti punti

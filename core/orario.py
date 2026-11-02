@@ -11,7 +11,7 @@ scrivere gli OnCalendar del timer systemd dagli orari di config.json:
 
 import json
 import sys
-from datetime import datetime, time
+from datetime import date, datetime, time, timedelta
 
 
 # Un giro di controllo ogni INTERVALLO secondi (anche il timer systemd usa questo passo)
@@ -21,6 +21,37 @@ INTERVALLO = 15
 def secondi_al_prossimo_giro(adesso: datetime) -> float:
     """Quanto manca al prossimo multiplo di INTERVALLO secondi (es. :00, :15, :30, :45)."""
     return INTERVALLO - adesso.timestamp() % INTERVALLO
+
+
+def pasqua(anno: int) -> date:
+    """La domenica di Pasqua (calendario gregoriano, algoritmo di Meeus/Jones/Butcher)."""
+    a, b, c = anno % 19, anno // 100, anno % 100
+    d, e = divmod(b, 4)
+    g = (8 * b + 13) // 25
+    h = (19 * a + b - d - g + 15) % 30
+    i, k = divmod(c, 4)
+    l = (32 + 2 * e + 2 * i - h - k) % 7
+    m = (a + 11 * h + 22 * l) // 451
+    mese, giorno = divmod(h + l - 7 * m + 114, 31)
+    return date(anno, mese, giorno + 1)
+
+
+def festivo(giorno: date) -> str:
+    """Il nome della festività se Borsa Italiana è chiusa quel giorno feriale, se no ''.
+
+    Chiusa: Capodanno, Venerdì Santo, Pasquetta, 1° maggio, 24, 25, 26 e 31 dicembre.
+    Aperta nelle altre feste italiane (6 gennaio, 25 aprile, 2 giugno, Ferragosto, ...).
+    """
+    fisse = {(1, 1): 'Capodanno', (5, 1): 'Festa del lavoro', (12, 24): 'Vigilia di Natale',
+             (12, 25): 'Natale', (12, 26): 'Santo Stefano', (12, 31): 'San Silvestro'}
+    if (giorno.month, giorno.day) in fisse:
+        return fisse[(giorno.month, giorno.day)]
+    domenica = pasqua(giorno.year)
+    if giorno == domenica - timedelta(days=2):
+        return 'Venerdì Santo'
+    if giorno == domenica + timedelta(days=1):
+        return 'Pasquetta'
+    return ''
 
 
 def _ora(testo: str) -> time:

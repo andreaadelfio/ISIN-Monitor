@@ -87,7 +87,7 @@ def test_lista_da_supabase_salvata_in_cache(monitor):
     assert monitor.online
     assert [t['isin'] for t in titoli] == ['IT0003132476', 'US0231351067']
     assert titoli[0]['ultimo_prezzo'] == 20.0 and titoli[0]['soglia'] == 0.5
-    assert titoli[1]['ultimo_prezzo'] is None and titoli[1]['senza_storico']
+    assert titoli[1]['ultimo_prezzo'] is None
     assert stato.leggi('titoli.json') == titoli
 
 
@@ -286,3 +286,129 @@ def test_dopo_un_429_giro_interrotto_e_pausa(monitor):
     assert monitor.borsa.richieste == 2                 # il terzo titolo non è stato chiesto
     assert modulo_app.PAUSA_429 in monitor.pause
     assert [r['isin'] for r in monitor.db.scritture[0]] == ['IT0003132476']
+
+
+def test_anno_intero_una_volta_per_titolo_anche_se_aggiunto_in_giornata(monitor, monkeypatch):
+    chiamate = []
+
+    def riempi_finto(db, yahoo, titolo, passi, adesso, scrivi=True):
+        chiamate.append((titolo['isin'], 'completo' if passi is modulo_app.storico.COMPLETO else '7 giorni'))
+        return None if titolo['isin'] == 'US0231351067' else 0   # Yahoo senza dati per Amazon
+
+    monkeypatch.setattr(modulo_app.storico, 'riempi_titolo', riempi_finto)
+    titoli = monitor.carica_titoli()
+    adesso = datetime(2026, 10, 28, 9, tzinfo=modulo_app.ROMA)
+    monitor.riempi_buchi(titoli, adesso)
+    monitor.riempi_buchi(titoli, adesso)
+    # Eni ha l'anno intero una volta sola, Amazon (Yahoo senza dati) finché non riesce
+    assert chiamate == [('IT0003132476', 'completo'), ('US0231351067', 'completo'),
+                        ('IT0003132476', '7 giorni'), ('US0231351067', 'completo')]
+
+    # Un simbolo_borsa nuovo è un altro titolo per Yahoo: di nuovo l'anno intero
+    chiamate.clear()
+    monitor.riempi_buchi([{**titoli[0], 'simbolo_borsa': 'ENI.DE'}], adesso)
+    assert chiamate == [('IT0003132476', 'completo')]
+
+
+def test_dopo_una_risposta_lenta_niente_raffica(monitor):
+    class BorsaLenta(BorsaFinta):
+        def get_price(self, isin):
+            if isin == 'I0':
+                modulo_app.time.sleep(10)        # timeout: 10 secondi per il primo titolo
+            return super().get_price(isin)
+
+    titoli = [{'isin': f'I{i}'} for i in range(4)]
+    monitor.borsa = BorsaLenta({f'I{i}': 1.0 for i in range(4)})
+    monitor.leggi_prezzi(titoli, durata=12)
+    # Dopo i 10 secondi gli altri tre restano a 3 secondi l'uno dall'altro
+    assert monitor.pause == [10, 3, 3]
+
+
+def test_sospeso_piu_vecchio_del_database_non_vince_anche_con_fusi_diversi(monitor):
+    # Supabase: 10:00 UTC (11:00 a Roma); in sospeso: 10:30 a Roma, più vecchio
+    monitor.db = DbFinto([{**RIGHE_WATCHLIST[0],
+                           'ultimo': [{'ts': '2026-10-28T10:00:00+00:00', 'prezzo': 20.0}]}])
+    stato.scrivi('prezzi_in_sospeso.json', [
+        {'isin': 'IT0003132476', 'ts': '2026-10-28T10:30:00+01:00', 'prezzo': 19.0, 'fonte': 'borsa'}])
+    assert monitor.carica_titoli()[0]['ultimo_prezzo'] == 20.0
+
+
+@pytest.mark.parametrize('status, tenuti', [(401, True), (503, True), (None, True), (400, False)])
+def test_prezzi_tenuti_se_la_chiave_e_sbagliata_buttati_se_rifiutati(monitor, status, tenuti):
+    monitor.carica_titoli()
+
+    def rifiuta(righe):
+        raise ErroreDatabase('Supabase POST prezzi', status)
+
+    monitor.db.scrivi_prezzi = rifiuta
+    monitor.borsa = BorsaFinta({'IT0003132476': 20.3})
+    monitor.controlla_tutti()
+    assert bool(stato.leggi('prezzi_in_sospeso.json')) == tenuti
+
+
+def test_telegram_aspetta_retry_after_e_riprova(config, monkeypatch):
+    istanza = ISINMonitor(config)
+    risposte = [{'ok': False, 'error_code': 429, 'description': 'Too Many Requests: retry after 3',
+                 'parameters': {'retry_after': 3}}, {'ok': True}]
+    pause = []
+
+    class Risposta:
+        def __init__(self, dati):
+            self.dati = dati
+
+        def json(self):
+            return self.dati
+
+    monkeypatch.setattr(modulo_app.requests, 'post', lambda *a, **k: Risposta(risposte.pop(0)))
+    monkeypatch.setattr(modulo_app.time, 'sleep', pause.append)
+    assert istanza.send_telegram_message('ciao')
+    assert pause == [3] and risposte == []
+
+
+@pytest.mark.parametrize('ultimo, completo', [('2026-10-22', False), ('2026-10-20', True)])
+def test_dopo_le_vacanze_riempimento_completo(monitor, monkeypatch, ultimo, completo):
+    class Giorno(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime(2026, 10, 28, 9, 0, tzinfo=tz)
+
+    chiamate = []
+    monkeypatch.setattr(modulo_app, 'datetime', Giorno)
+    monkeypatch.setattr(monitor, 'riempi_buchi', lambda titoli, adesso, completo=False: chiamate.append(completo))
+    monkeypatch.setattr(monitor, 'controlla_proposte', lambda: None)
+    stato.scrivi('mattino.json', {'giorno': ultimo})
+    monitor.borsa = BorsaFinta({})
+    monitor.controlla_tutti()
+    assert chiamate == [completo]
+
+
+def test_salto_enorme_salvato_solo_se_confermato(monitor):
+    # Eni da 20 a 2,03: un prezzo letto male non entra nello storico...
+    monitor.borsa = BorsaFinta({'IT0003132476': 2.03})
+    monitor.controlla_tutti()
+    assert monitor.db.scritture == [] and monitor.telegram_inviati == []
+    monitor.borsa = BorsaFinta({'IT0003132476': 20.05})
+    monitor.controlla_tutti()
+    assert [r['prezzo'] for r in monitor.db.scritture[0]] == [20.05]
+
+    # ...un salto vero (frazionamento) sì, al giro dopo, anche se il prezzo si è mosso un po'
+    monitor.borsa = BorsaFinta({'IT0003132476': 10.0})
+    monitor.controlla_tutti()
+    assert len(monitor.db.scritture) == 1
+    monitor.borsa = BorsaFinta({'IT0003132476': 10.1})
+    monitor.controlla_tutti()
+    assert [r['prezzo'] for r in monitor.db.scritture[1]] == [10.1]
+    assert len(monitor.telegram_inviati) == 1
+
+
+def test_supabase_irraggiungibile_un_timeout_solo_per_giro(monitor):
+    monitor.carica_titoli()
+    monitor.db.rotto = True
+    tentativi = []
+    scrivi = monitor.db.scrivi_prezzi
+    monitor.db.scrivi_prezzi = lambda righe: (tentativi.append(righe), scrivi(righe))
+    monitor.borsa = BorsaFinta({'IT0003132476': 20.3})
+    monitor.controlla_tutti()
+    # La lista non è arrivata per rete: la scrittura non si prova, i prezzi aspettano
+    assert tentativi == []
+    assert [r['prezzo'] for r in stato.leggi('prezzi_in_sospeso.json')] == [20.3]

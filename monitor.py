@@ -4,7 +4,9 @@ ISIN Monitor - prezzi da Borsa Italiana, storico in Supabase (MyFinance), avvisi
 
 Il timer systemd lo avvia in orario di mercato con --monitor: resta acceso e fa un
 giro ogni 15 secondi fino alla chiusura (il timer lo riavvia se si ferma).
-Fuori orario esce subito, prima degli import pesanti (pandas, matplotlib).
+Fuori orario esce subito, prima degli import pesanti (pandas, matplotlib); nei giorni
+feriali di borsa chiusa (core/orario.py, festivo) resta acceso senza fare niente fino
+alla chiusura, così il timer non lo rilancia. Un solo monitor alla volta (monitor.lock).
 """
 
 import argparse
@@ -12,9 +14,11 @@ import builtins
 import json
 import os
 import sys
+import time
 from datetime import datetime
 
-from core.orario import descrizione_orario, in_orario
+from core import stato
+from core.orario import descrizione_orario, festivo, in_orario
 
 
 def carica_config(percorso: str = 'config.json') -> dict:
@@ -25,6 +29,19 @@ def carica_config(percorso: str = 'config.json') -> dict:
             return json.load(file)
     except json.JSONDecodeError as errore:
         sys.exit(f"ERRORE: Errore nel parsing del file di configurazione: {errore}")
+
+
+def borsa_chiusa(monitoring: dict, adesso: datetime) -> bool:
+    """True nei giorni feriali di chiusura di Borsa Italiana (se si segue l'orario di borsa)."""
+    return (monitoring.get('market_hours_only', True) and monitoring.get('weekdays_only', True)
+            and bool(festivo(adesso.date())))
+
+
+def aspetta_la_chiusura(monitoring: dict) -> None:
+    """Resta acceso, fermo, fino alla chiusura: se --monitor uscisse prima, il timer
+    systemd lo riavvierebbe ogni 15 secondi per tutto il giorno."""
+    while in_orario(monitoring, datetime.now()):
+        time.sleep(60)
 
 
 def main():
@@ -64,9 +81,21 @@ def main():
         if not args.ignora_orario and not in_orario(config['monitoring'], adesso):
             print(f"⏰ Fuori orario di mercato ({adesso:%a %H:%M}): controllo saltato")
             return
+        if not args.ignora_orario and borsa_chiusa(config['monitoring'], adesso):
+            print(f"🏖️ Borsa Italiana chiusa oggi ({festivo(adesso.date())}): niente giri")
+            if args.monitor:
+                aspetta_la_chiusura(config['monitoring'])
+            return
     elif not (args.test_telegram or args.grafico or args.riempi_storico):
         parser.print_help()
         return
+
+    if args.monitor or args.giro:
+        # Un monitor alla volta: due insieme raddoppierebbero le richieste a Borsa Italiana (429)
+        lock = stato.blocca('monitor.lock')
+        if lock is None:
+            print("⏭️ Un altro monitor sta già girando (il servizio systemd?): esco")
+            return
 
     from core.app import ISINMonitor
     monitor = ISINMonitor(config)
@@ -79,6 +108,8 @@ def main():
         monitor.riempi_storico(scrivi=not args.prova)
     elif args.check_once or config.get('test'):
         monitor.run_test()
+        if args.monitor:
+            aspetta_la_chiusura(config['monitoring'])
     elif args.giro:
         monitor.controlla_tutti()
     else:
