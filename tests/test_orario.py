@@ -122,3 +122,42 @@ def test_con_test_nel_config_un_avviso_solo_al_giorno(monkeypatch):
     monitor.main()
     # Dopo il test resta fermo fino alla chiusura: il timer non lo rilancia ogni 15 secondi
     assert MonitorFinto.test == 1 and pause == [60]
+
+
+def test_stato_locale_in_poche_righe(monkeypatch, capsys):
+    import monitor
+    from core import stato
+    stato.scrivi('prezzi_in_sospeso.json', [{'isin': 'A', 'ts': '2026-11-03T10:00:00+01:00', 'prezzo': 1}])
+    stato.scrivi('mattino.json', {'giorno': '2026-11-03'})
+    stato.scrivi('titoli.json', [{'ultimo_ts': '2026-11-03T09:30:00+00:00'},    # 10:30 a Roma
+                                 {'ultimo_ts': '2026-11-03T10:00:00+01:00'}])
+    acceso = stato.blocca('monitor.lock')
+    monkeypatch.setattr('sys.argv', ['monitor.py', '--stato'])
+    monitor.main()
+    uscita = capsys.readouterr().out
+    assert 'Monitor acceso: sì' in uscita
+    assert 'Prezzi in sospeso (non ancora in Supabase): 1, dal 2026-11-03T10:00:00+01:00' in uscita
+    assert 'Ultimi lavori del mattino: 2026-11-03' in uscita
+    assert 'ultimo prezzo: 2026-11-03T09:30:00+00:00' in uscita
+    acceso.close()
+
+
+def test_stato_dice_se_oggi_la_borsa_e_chiusa(monkeypatch, capsys):
+    import monitor
+
+    class Natale(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime(2026, 12, 25, 10)
+
+    monkeypatch.setattr(monitor, 'datetime', Natale)
+    monitor.mostra_stato()
+    assert 'Oggi Borsa Italiana è chiusa (Natale)' in capsys.readouterr().out
+
+
+def test_stato_non_crea_il_lock(monkeypatch, capsys):
+    import monitor
+    from core import stato
+    monitor.mostra_stato()
+    assert 'Monitor acceso: no' in capsys.readouterr().out
+    assert not (stato.CARTELLA / 'monitor.lock').exists()

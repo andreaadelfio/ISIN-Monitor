@@ -44,6 +44,32 @@ def aspetta_la_chiusura(monitoring: dict) -> None:
         time.sleep(60)
 
 
+def mostra_stato() -> None:
+    """Lo stato locale in poche righe (i file di ~/.local/state/isin-monitor)."""
+    # Solo se il file c'è già: con sudo, root non deve crearlo (il servizio non potrebbe aprirlo)
+    acceso = False
+    if (stato.CARTELLA / 'monitor.lock').exists():
+        lock = stato.blocca('monitor.lock')
+        acceso = lock is None
+        if lock:
+            lock.close()
+    print("Monitor acceso: " + ("sì" if acceso else "no"))
+    chiusa = festivo(datetime.now().date())
+    if chiusa:
+        print(f"Oggi Borsa Italiana è chiusa ({chiusa}): il monitor resta fermo")
+    in_sospeso = stato.leggi('prezzi_in_sospeso.json', [])
+    print(f"Prezzi in sospeso (non ancora in Supabase): {len(in_sospeso)}"
+          + (f", dal {min((riga['ts'] for riga in in_sospeso), key=datetime.fromisoformat)}"
+             if in_sospeso else ''))
+    print(f"Ultimi lavori del mattino: {stato.leggi('mattino.json', {}).get('giorno', 'mai')}")
+    print(f"Titoli con lo storico Yahoo completo: {len(stato.leggi('storico_completo.json', []))}")
+    titoli = stato.leggi('titoli.json', [])
+    # Le ore come date: quelle di Supabase sono in UTC, quelle del monitor con il fuso di Roma
+    ultimo = max((t['ultimo_ts'] for t in titoli if t.get('ultimo_ts')),
+                 key=datetime.fromisoformat, default='nessuno')
+    print(f"Titoli nell'ultima lista salvata: {len(titoli)}, ultimo prezzo: {ultimo}")
+
+
 def main():
     parser = argparse.ArgumentParser(description='ISIN Monitor - Monitoraggio prezzi e notifiche')
     parser.add_argument('--monitor', action='store_true',
@@ -64,9 +90,15 @@ def main():
                         help='Con --riempi-storico: conta i punti senza scriverli')
     parser.add_argument('--ignora-orario', action='store_true',
                         help='Controlla anche fuori dall\'orario di mercato')
+    parser.add_argument('--stato', action='store_true',
+                        help='Stato locale: monitor acceso, prezzi in sospeso, ultimo mattino')
     parser.add_argument('--with-profiling', action='store_true',
                         help='Abilita il profiling delle funzioni')
     args = parser.parse_args()
+
+    if args.stato:
+        mostra_stato()
+        return
 
     config = carica_config()
     builtins.ENABLE_PROFILING = args.with_profiling

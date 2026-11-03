@@ -51,7 +51,9 @@ installa() {
     sudo tee /etc/systemd/system/$SERVICE_NAME.service > /dev/null << EOF
 [Unit]
 Description=ISIN Monitor Service
-After=network.target
+# Dopo l'accensione del PC aspetta che la rete sia davvero su
+Wants=network-online.target
+After=network-online.target
 
 [Service]
 # Resta acceso in orario di mercato (un giro ogni 15 secondi) ed esce alla chiusura
@@ -123,6 +125,11 @@ case "$1" in
         sudo systemctl status $TIMER_NAME $SERVICE_NAME --no-pager -l
         systemctl list-timers $TIMER_NAME --no-pager
         ;;
+    stato)
+        # Anche con sudo: lo stato è quello del tuo utente, non di root
+        cd "$CARTELLA" && ISIN_MONITOR_STATO="$HOME_UTENTE/.local/state/isin-monitor" \
+            "$PYTHON_BIN" monitor.py --stato
+        ;;
     logs)
         echo "Log servizio (tempo reale - premi Ctrl+C per uscire):"
         sudo journalctl -u $SERVICE_NAME -f --no-pager
@@ -160,10 +167,12 @@ case "$1" in
         echo "  ./setup.sh restart            # Riavvia il timer (default)"
         echo "  ./setup.sh stop | start       # Ferma timer e monitor / riavvia il timer"
         echo "  ./setup.sh status             # Stato del timer e prossimi avvii"
+        echo "  ./setup.sh stato              # Stato locale: prezzi in sospeso, ultimo mattino"
         echo "  ./setup.sh logs               # Log in tempo reale"
         echo "  ./setup.sh test               # Test manuale con avviso Telegram"
         echo "  ./setup.sh grafico ISIN [file.png]   # Salva il grafico di un titolo"
         echo "  ./setup.sh riempi-storico [--prova]  # Riempie i buchi dello storico con Yahoo"
+        echo "  ./setup.sh profile            # Come test, con il profiling delle funzioni"
         echo "  ./setup.sh reinstall | uninstall"
         ;;
 esac

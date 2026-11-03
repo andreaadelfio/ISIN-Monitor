@@ -9,9 +9,11 @@ In orario di mercato è un processo solo, sempre acceso (lo avvia il timer syste
 08:55 ed esce da solo alle 18:05), con tre attività separate:
 
 - **giri dei prezzi**, ogni 15 secondi esatti (:00, :15, :30, :45): le richieste a Borsa
-  Italiana sono distribuite nei 15 secondi, una ogni 0,7 secondi circa con 17 titoli,
-  perché Borsa Italiana risponde **429** (troppe richieste) alle raffiche. Dopo un 429 il
-  giro si interrompe e il monitor fa una pausa di 60 secondi;
+  Italiana sono distribuite nei 15 secondi, una ogni 0,7 secondi circa con 17 titoli
+  (dopo una risposta lenta recuperano a 0,35 secondi l'una dall'altra, così il giro resta
+  nei 15 secondi), perché Borsa Italiana risponde **429** (troppe richieste) alle raffiche. Dopo un 429 il
+  giro si interrompe e il monitor fa una pausa di 60 secondi. Si interrompe anche se due
+  titoli di fila non hanno risposta (rete giù), invece di aspettare un timeout per titolo;
 - **avvisi**: passano da una coda a un thread che disegna il grafico e lo manda su
   Telegram, così un grafico o un invio lento non fanno saltare i giri;
 - **lavori del mattino** (Yahoo e proposte), in un altro thread al primo giro del giorno.
@@ -27,34 +29,44 @@ PC spento) e manda su Telegram i cambiamenti delle proposte di MyFinance.
   (variazione in % fra due prezzi che fa scattare un avviso, di solito 0,5). L'ultima lista
   è salvata anche in `~/.local/state/isin-monitor/titoli.json`: se Supabase non risponde,
   il monitor continua con quella.
-- **Prezzi**: Borsa Italiana, scheda del titolo per ISIN (dopo la prima lettura il monitor
-  ricorda l'indirizzo finale della pagina, così ogni titolo costa una richiesta sola). Un prezzo si salva solo se è cambiato; tutti i prezzi
+- **Prezzi**: Borsa Italiana, scheda del titolo per ISIN (azioni italiane ed estere, ETF
+  e BTP; dopo la prima lettura il monitor ricorda l'indirizzo finale della pagina, così
+  ogni titolo costa una richiesta sola; con la rete giù o un errore del server non prova
+  altre pagine). Prima dell'apertura (08:55-09:00) la scheda non ha ancora il prezzo: il
+  monitor la salta senza errori. Un prezzo si salva solo se è cambiato; tutti i prezzi
   nuovi di un giro vanno nel database con una sola scrittura (tabella `prezzi`, fonte
   `borsa`). Se Supabase non risponde restano in
   `~/.local/state/isin-monitor/prezzi_in_sospeso.json` e partono al giro dopo. Titoli
-  poco scambiati a Milano (BNP, i titoli americani prima dell'apertura di New York) hanno
-  pochi punti al giorno: il prezzo cambia solo quando c'è un contratto.
+  poco scambiati a Milano (BNP, i titoli americani prima dell'apertura di New York)
+  hanno pochi punti al giorno: il prezzo cambia solo quando c'è un contratto.
 - **Avvisi**: variazione rispetto all'ultimo prezzo salvato ≥ `soglia_avviso` (in su o in
-  giù). Non c'è pausa fra un avviso e l'altro: è voluto. Un salto di più del 20% (spesso un
-  prezzo letto male) si salva e si avvisa solo se il giro dopo lo conferma. L'avviso ha i link a Fineco,
-  Borsa Italiana e alla scheda in MyFinance (`<myfinance_url>/?isin=<ISIN>`).
+  giù). Non c'è pausa fra un avviso e l'altro: è voluto. Un salto di più del 20% (spesso
+  un prezzo letto male) si salva e si avvisa solo se il giro dopo lo conferma. La
+  didascalia comincia con nome, prezzo e variazione (si vedono già nella notifica) e i
+  link a Fineco, Borsa Italiana (la scheda letta dal monitor) e alla scheda in MyFinance
+  (`<myfinance_url>/?isin=<ISIN>`); sotto, la tabella in colonne allineate per il
+  telefono. Un avviso rimasto in coda più di 30 minuti (Telegram giù) non si manda più.
 - **Grafici**: solo da Supabase, quattro richieste per avviso. Immagine verticale per il
-  telefono (1200×1800): in alto, a tutta larghezza, Oggi (tutti i prezzi di Borsa Italiana
-  di oggi, con i punti verdi sopra l'apertura e rossi sotto); sotto, su due colonne, 7 e
-  30 giorni (un prezzo ogni 15 minuti, una linea per seduta su fondo grigio, senza notti e
-  weekend), 360 giorni (una chiusura al giorno) e la tabella con apertura, chiusure di 1, 7, 30 e 360 giorni fa, massimo e minimo dell'anno
-  (prezzi in centesimi, variazioni fino alla prima cifra decimale significativa). Il punto
-  rosso è il prezzo attuale. Ogni periodo ha il suo colore anche dentro i pannelli più
-  lunghi (blu 360 giorni, verde acqua 30, arancio 7, viola oggi) e la legenda di ogni
-  pannello ne dà la variazione. Nel pannello annuale anche le righe del massimo e del
-  minimo. In alto a destra il segnale e il punteggio dell'analisi di MyFinance (che usa le
-  medie mobili a 50 e 200 giorni per il trend), coi colori del sito.
+  telefono (1200×1800): in alto, a tutta larghezza, Oggi (tutti i prezzi di Borsa
+  Italiana di oggi, con i punti verdi sopra l'apertura e rossi sotto); sotto, su due
+  colonne, 7 e 30 giorni (un prezzo ogni 15 minuti, una linea per seduta su fondo
+  grigio, senza notti e weekend), 360 giorni (una chiusura al giorno) e la tabella con
+  apertura, chiusure di 1, 7, 30 e 360 giorni fa, massimo e minimo dell'anno (prezzi in
+  centesimi, variazioni fino alla prima cifra decimale significativa). Il punto rosso è
+  il prezzo attuale (in Oggi quello verde bordato è l'apertura). Ogni periodo ha il suo
+  colore anche dentro i pannelli più lunghi (blu 360 giorni, verde acqua 30, arancio 7,
+  viola oggi) e la legenda di ogni pannello ne dà la variazione. Nel pannello annuale
+  anche le righe del massimo e del minimo. In alto a destra il segnale e il punteggio
+  dell'analisi di MyFinance (che usa le medie mobili a 50 e 200 giorni per il trend),
+  coi colori del sito.
 - **Le tue posizioni**: dal registro `investimenti` di MyFinance. Se hai il titolo, una riga
   punteggiata scura segna il prezzo di carico (calcolato come nel sito: ABP del conto, o
   costo diviso quote), la tabella ha la riga "Carico" e il messaggio il guadagno o la
   perdita su tutte le quote; se il carico è lontano dai prezzi di un pannello la legenda
   dice "sopra" o "sotto". Acquisti (▲) e vendite (▼) sono triangoli nei pannelli in alto;
-  il prezzo di vendita è il Rimborso più la Cedola dello stesso giorno.
+  il prezzo di vendita è il Rimborso più la Cedola dello stesso giorno. Per i BTP il carico
+  non è ancora giusto: nel registro la quantità è in titoli da 1000 €, Borsa dà il prezzo
+  per 100 di nominale.
 - **Proposte**: l'analisi serale di MyFinance assegna a ogni titolo un segnale (Compra, Da
   valutare, Attendi, Evita per ora) e un punteggio. Al primo avvio del mattino, se un
   segnale o la proposta del giorno (il "Compra" con il punteggio più alto) sono cambiati,
@@ -106,12 +118,14 @@ così il timer non lo rilancia ogni 15 secondi. Le altre feste italiane (6 genna
 
 ```bash
 ./setup.sh status                     # stato del timer e prossimi avvii
+./setup.sh stato                      # monitor acceso?, prezzi in sospeso, ultimo mattino
 ./setup.sh logs                       # log in tempo reale
 ./setup.sh restart | stop | start
 ./setup.sh test                       # primo titolo con soglia 0: manda sempre un avviso
 ./setup.sh grafico IT0003132476 eni.png   # salva il grafico di un titolo, senza Telegram
 ./setup.sh riempi-storico --prova     # quanti punti Yahoo mancano (senza scrivere)
 ./setup.sh riempi-storico             # li scrive
+./setup.sh profile                    # come test, con il profiling delle funzioni
 python3 monitor.py --test-telegram    # messaggio di prova
 python3 monitor.py --giro --ignora-orario      # un giro solo, anche fuori orario
 ```
@@ -127,7 +141,8 @@ python3 monitor.py --giro --ignora-orario      # un giro solo, anche fuori orari
 | `monitoring.market_open_time`, `market_close_time` | orario (anche del timer systemd) |
 | `monitoring.price_comparison_days` | i tre periodi dei grafici in alto (1 è ignorato) |
 | `monitoring.historical_table_days` | le chiusure nella tabella |
-| `api.request_timeout` | timeout delle richieste |
+| `api.request_timeout` | timeout delle richieste a Supabase e Telegram |
+| `api.borsa_timeout` | timeout delle richieste a Borsa Italiana (5 secondi se manca) |
 | `yahoo.enabled`, `timeout`, `max_retries` | riempimento dei buchi con Yahoo |
 | `supabase.url` | progetto Supabase di MyFinance |
 | `test` | `true`: `--monitor` fa il test del primo titolo (un avviso) e poi resta fermo fino alla chiusura |
@@ -208,14 +223,24 @@ tests/                test (pytest)
   `~/.config/isin-monitor/supabase.env` (o il servizio non ha `EnvironmentFile=`: rilancia
   `./setup.sh install`).
 - **"Uso l'ultima lista salvata"**: Supabase non risponde; i prezzi aspettano in locale e
-  partono appena torna. Un `401` vuol dire chiave sbagliata o revocata.
+  partono appena torna ("Supabase di nuovo raggiungibile"). Finché è giù il messaggio si
+  ripete ogni 5 minuti, non a ogni giro (quanti prezzi aspettano: `./setup.sh stato`). Un
+  `401` vuol dire chiave sbagliata o revocata.
 - **"Nessun prezzo per ..."**: Borsa Italiana non ha la scheda di quell'ISIN (titolo non
   quotato a Milano o ISIN cambiato): correggi l'ISIN dal sito. Finché la scheda non
   c'è, il monitor la richiede ogni 10 minuti invece che a ogni giro.
-- **"Borsa Italiana: troppe richieste (429)"**: Borsa Italiana limita le richieste; il
+- **"Borsa Italiana: troppe richieste (429 o 403)"**: Borsa Italiana limita le richieste; il
   monitor fa una pausa di 60 secondi e riprende. Un `--giro` o un secondo `--monitor`
   lanciati mentre il servizio gira escono subito ("Un altro monitor sta già girando"):
   le richieste si sommerebbero. `./setup.sh test` (una richiesta sola) si può usare.
+- **"Borsa Italiana non risponde (rete o server): giro interrotto"**: due titoli di fila
+  senza risposta; il giro dopo riprova. Se dura, controlla la rete del PC.
+- **Giro lento** (`🔍 ... (27.7 s: Borsa 22.1 s (più lenta ... 14.0 s), Supabase 0.4 s)`): un
+  giro oltre i 15 secondi salta il successivo; la riga dice se ha rallentato Borsa Italiana
+  (e quale titolo) o Supabase.
+- **Troppi avvisi da un titolo** (es. un titolo americano quotato a Milano, con pochi
+  contratti e prezzi che saltano): alza la sua `soglia_avviso` dalla sezione ISIN Monitor
+  del sito; vale dal giro dopo, senza riavviare niente.
 - **Nessun avviso**: guarda `./setup.sh logs`; fuori orario il timer non parte;
   `./setup.sh test` prova Telegram con un avviso vero.
 - **Grafici vuoti o con buchi**: `./setup.sh riempi-storico --prova` dice quanti punti

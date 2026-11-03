@@ -112,3 +112,24 @@ def test_mattino_ai_5_minuti_solo_senza_dato_al_minuto():
     yahoo = YahooFinto({'1m': serie(('2026-10-26 09:00:00', 1.0))})
     riempi_titolo(DbFinto({}), yahoo, {'isin': 'I', 'simbolo_borsa': 'ENI.MI'}, storico.GIORNALIERO, adesso)
     assert [c[2] for c in yahoo.chiamate] == ['1m']
+
+
+def test_riempi_titolo_none_se_yahoo_non_da_niente():
+    adesso = datetime(2026, 10, 27, 10, tzinfo=ROMA)
+
+    class YahooRotto:
+        def get_series(self, simbolo, periodo, intervallo):
+            raise RuntimeError('Yahoo non risponde')
+
+    # Senza simbolo, con Yahoo giù o senza dati: None (il completo va rifatto più avanti)
+    assert riempi_titolo(DbFinto({}), YahooRotto(), {'isin': 'I'}, storico.COMPLETO, adesso) is None
+    assert riempi_titolo(DbFinto({}), YahooRotto(), {'isin': 'I', 'simbolo_borsa': 'X.MI'},
+                         storico.COMPLETO, adesso) is None
+    vuota = YahooFinto({'1m': serie(), '5m': serie(), '1d': serie()})
+    assert riempi_titolo(DbFinto({}), vuota, {'isin': 'I', 'simbolo_borsa': 'X.MI'},
+                         storico.COMPLETO, adesso) is None
+    # Con dati ma nessun buco: 0, non None
+    pieno = YahooFinto({'1m': serie(('2026-10-26 09:00:00', 1.0))})
+    occupato = DbFinto({'5 minutes': [datetime(2026, 10, 26, 10, 0, tzinfo=ROMA)]})
+    assert riempi_titolo(occupato, pieno, {'isin': 'I', 'simbolo_borsa': 'X.MI'},
+                         storico.GIORNALIERO, adesso) == 0

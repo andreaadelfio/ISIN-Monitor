@@ -43,7 +43,7 @@ def blocca(nome: str):
     altro processo. Il sistema lo libera da solo quando il processo esce, anche se muore.
     """
     CARTELLA.mkdir(parents=True, exist_ok=True)
-    file = open(CARTELLA / nome, 'w')
+    file = open(CARTELLA / nome, 'a')   # 'a': non tocca il file se il lock è di un altro
     try:
         fcntl.flock(file, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except OSError:

@@ -51,9 +51,13 @@ class BorsaFinta:
     def __init__(self, prezzi):
         self.prezzi = prezzi
         self.troppe_richieste = False
+        self.non_risponde = False
 
     def get_price(self, isin):
         return self.prezzi.get(isin), None
+
+    def scheda(self, isin):
+        return f'https://www.borsaitaliana.it/borsa/etf/scheda/{isin}-ETFP.html'
 
 
 @pytest.fixture
@@ -118,6 +122,10 @@ def test_giro_una_scrittura_e_avviso_con_link(monitor):
     metodo, dati = monitor.telegram_inviati[0]
     assert metodo == 'sendPhoto'
     assert '<a href="https://esempio.pages.dev/?isin=IT0003132476">MyFinance</a>' in dati['caption']
+    # Nome, prezzo e variazione in testa: si vedono già nella notifica
+    assert dati['caption'].startswith('<b>Eni</b> €20.2 📈 +1.00% (')
+    # Il link a Borsa Italiana è la scheda letta dal monitor
+    assert 'href="https://www.borsaitaliana.it/borsa/etf/scheda/IT0003132476-ETFP.html"' in dati['caption']
     # La cache ha i prezzi nuovi: il prossimo giro (anche offline) confronta con questi
     assert stato.leggi('titoli.json')[0]['ultimo_prezzo'] == 20.2
 
@@ -131,10 +139,10 @@ def test_avviso_con_la_tua_posizione(monitor):
     metodo, dati = monitor.telegram_inviati[0]
     assert metodo == 'sendPhoto'
     # Carico 18 €: +2.2 € per quota, +22 € su 10 quote
-    assert 'Carico: €18 (+12.222% 📈) +2.200 → 10 quote, +22.00€' in dati['caption']
+    assert 'Carico €18   +12.222% 📈 +2.200\n       10 quote: +22.00€' in dati['caption']
     # Massimo e minimo dell'anno, prezzo attuale compreso (qui è il nuovo massimo)
-    assert 'Max: €20.2 (+0.000% ⚪) +0.000' in dati['caption']
-    assert 'Min: €19 (+6.316% 📈) +1.200' in dati['caption']
+    assert 'Max    €20.2  +0.000% ⚪ +0.000' in dati['caption']
+    assert 'Min    €19    +6.316% 📈 +1.200' in dati['caption']
 
 
 def test_segnale_di_myfinance_solo_senza_errori():
@@ -197,12 +205,13 @@ def test_lavori_del_mattino_una_volta_al_giorno(monitor, monkeypatch):
     assert chiamate == [2]
 
 
-class BorsaCrescente:
+class BorsaCrescente(BorsaFinta):
     """Eni sale dell'1% a ogni lettura: un avviso a ogni giro."""
 
     def __init__(self):
         self.prezzo = 20.0
         self.troppe_richieste = False
+        self.non_risponde = False
 
     def get_price(self, isin):
         if isin != 'IT0003132476':
@@ -211,7 +220,7 @@ class BorsaCrescente:
         return self.prezzo, None
 
 
-def test_monitora_avvisi_in_un_thread_che_non_blocca_i_giri(monitor, monkeypatch):
+def test_monitora_avvisi_in_un_thread_che_non_blocca_i_giri(monitor, monkeypatch, capsys):
     import threading
 
     monitor.borsa = BorsaCrescente()
@@ -239,6 +248,7 @@ def test_monitora_avvisi_in_un_thread_che_non_blocca_i_giri(monitor, monkeypatch
 
     assert [r[0]['prezzo'] for r in monitor.db.scritture] == [20.2, 20.402]
     assert len(monitor.telegram_inviati) == 2          # monitora aspetta la coda prima di uscire
+    assert 'Fine dei giri: 2 giri (0 con errori), 2 avvisi' in capsys.readouterr().out
     assert threading.main_thread().name not in thread_avvisi
 
 
@@ -268,6 +278,7 @@ class BorsaCheLimita:
 
     def __init__(self):
         self.troppe_richieste = False
+        self.non_risponde = False
         self.richieste = 0
 
     def get_price(self, isin):
@@ -320,8 +331,9 @@ def test_dopo_una_risposta_lenta_niente_raffica(monitor):
     titoli = [{'isin': f'I{i}'} for i in range(4)]
     monitor.borsa = BorsaLenta({f'I{i}': 1.0 for i in range(4)})
     monitor.leggi_prezzi(titoli, durata=12)
-    # Dopo i 10 secondi gli altri tre restano a 3 secondi l'uno dall'altro
-    assert monitor.pause == [10, 3, 3]
+    # Dopo i 10 secondi il secondo parte subito, gli altri a mezzo passo (1,5 s): il ritardo
+    # si recupera senza raffiche
+    assert monitor.pause == [10, 1.5, 1.5]
 
 
 def test_sospeso_piu_vecchio_del_database_non_vince_anche_con_fusi_diversi(monitor):
@@ -412,3 +424,139 @@ def test_supabase_irraggiungibile_un_timeout_solo_per_giro(monitor):
     # La lista non è arrivata per rete: la scrittura non si prova, i prezzi aspettano
     assert tentativi == []
     assert [r['prezzo'] for r in stato.leggi('prezzi_in_sospeso.json')] == [20.3]
+
+
+def test_didascalia_senza_tabella_niente_code_vuoto():
+    from core.message_templates import CaptionTemplates
+    testo = CaptionTemplates.format_caption({'isin': 'X', 'nome': 'A & B'}, 1.5, [])
+    assert testo.startswith('<b>A &amp; B</b> €1.5 (') and '<code>' not in testo
+
+
+def test_borsa_che_non_risponde_giro_interrotto_dopo_due_titoli(monitor, capsys):
+    class BorsaGiu(BorsaFinta):
+        def get_price(self, isin):
+            self.richieste = getattr(self, 'richieste', 0) + 1
+            self.non_risponde = True
+            return None, None
+
+    titoli = [{'isin': f'I{i}'} for i in range(5)]
+    monitor.borsa = BorsaGiu({})
+    letture = monitor.leggi_prezzi(titoli, durata=10)
+    # I primi due senza risposta, gli altri tre nemmeno chiesti
+    assert monitor.borsa.richieste == 2 and [p for p, _ in letture] == [None] * 5
+    assert 'non risponde' in capsys.readouterr().out
+
+
+def test_supabase_giu_poche_righe_nel_log(monitor, capsys):
+    uscite = []
+    monitor.carica_titoli()
+    monitor.db.rotto = True
+    monitor.borsa = BorsaFinta({'IT0003132476': 20.3})
+    for _ in range(3):                       # tre giri di fila, 15 secondi l'uno
+        monitor.controlla_tutti()
+        uscite.append(capsys.readouterr().out)
+    assert "Uso l'ultima lista" in uscite[0] and 'in sospeso' in uscite[0]
+    assert "Uso l'ultima lista" not in uscite[1] + uscite[2]
+    assert 'in sospeso' not in uscite[1] + uscite[2]
+    modulo_app.time.sleep(modulo_app.LOG_OFFLINE)    # dopo 5 minuti di nuovo
+    monitor.controlla_tutti()
+    assert "Uso l'ultima lista" in capsys.readouterr().out
+    monitor.db.rotto = False
+    monitor.controlla_tutti()
+    assert 'Supabase di nuovo raggiungibile' in capsys.readouterr().out
+
+
+def test_didascalia_variazione_in_testa_solo_con_il_prezzo_precedente():
+    from core.message_templates import CaptionTemplates
+    from core.utils import TableDataGenerator
+    con = TableDataGenerator.generate_table_data(19.9, previous_price=20.0)
+    senza = TableDataGenerator.generate_table_data(19.9, opening_price=20.0)
+    assert CaptionTemplates.format_caption({'isin': 'X', 'nome': 'Eni'}, 19.9, con).startswith(
+        '<b>Eni</b> €19.9 📉 -0.50% (')
+    assert CaptionTemplates.format_caption({'isin': 'X', 'nome': 'Eni'}, 19.9, senza).startswith(
+        '<b>Eni</b> €19.9 (')
+
+
+def test_giro_lento_dice_chi_lo_ha_rallentato(monitor, capsys):
+    class BorsaLenta(BorsaFinta):
+        def get_price(self, isin):
+            if isin == 'US0231351067':
+                modulo_app.time.sleep(14)        # una risposta lentissima
+            return super().get_price(isin)
+
+    monitor.borsa = BorsaLenta({'IT0003132476': 20.0, 'US0231351067': 220.0})
+    monitor.controlla_tutti()
+    riga = next(r for r in capsys.readouterr().out.splitlines() if r.startswith('🔍'))
+    assert '(più lenta US0231351067 14.0 s), Supabase 0.0 s)' in riga
+
+
+def test_timeout_di_borsa_separato_da_quello_di_supabase(config):
+    assert ISINMonitor(config).borsa.timeout == 5
+    assert ISINMonitor({**config, 'api': {'request_timeout': 20, 'borsa_timeout': 3}}).borsa.timeout == 3
+
+
+def test_mai_due_richieste_a_meno_di_mezzo_passo(monitor):
+    import random
+    casuale = random.Random(7)
+    partenze = []
+
+    class BorsaAltalenante(BorsaFinta):
+        def get_price(self, isin):
+            partenze.append(modulo_app.time.monotonic())
+            modulo_app.time.sleep(casuale.choice([0.2, 0.2, 0.2, 3.0]))   # ogni tanto lenta
+            return 1.0, None
+
+    titoli = [{'isin': f'I{i}'} for i in range(18)]
+    monitor.borsa = BorsaAltalenante({})
+    for _ in range(20):
+        partenze.clear()
+        monitor.leggi_prezzi(titoli, durata=12)
+        distanze = [b - a for a, b in zip(partenze, partenze[1:])]
+        assert min(distanze) >= 12 / 18 / 2 - 1e-9
+
+
+def test_avvisi_troppo_vecchi_non_si_mandano(monitor, capsys):
+    import queue
+    from datetime import timedelta
+    coda = queue.Queue()
+    titolo = monitor.carica_titoli()[0]
+    adesso = datetime.now(modulo_app.ROMA)
+    coda.put({'titolo': titolo, 'prezzo': 20.2, 'precedente': 20.0,
+              'adesso': adesso - timedelta(hours=2)})
+    coda.put({'titolo': titolo, 'prezzo': 20.4, 'precedente': 20.2, 'adesso': adesso})
+    import threading
+    threading.Thread(target=monitor._spedisci_avvisi, args=(coda,), daemon=True).start()
+    coda.join()
+    assert len(monitor.telegram_inviati) == 1           # solo quello recente
+    assert 'non mandato: troppo vecchio' in capsys.readouterr().out
+
+
+def test_risposta_non_json_usa_la_lista_salvata(monitor):
+    monitor.carica_titoli()
+
+    def non_json():
+        raise ValueError('Expecting value: line 1 column 1 (char 0)')
+
+    monitor.db.titoli = non_json
+    titoli = monitor.carica_titoli()
+    assert not monitor.online and [t['isin'] for t in titoli] == ['IT0003132476', 'US0231351067']
+
+
+def test_errore_nello_storico_non_ferma_le_proposte(monitor, monkeypatch):
+    def rotto(*args, **kwargs):
+        raise ValueError('risposta non JSON')
+
+    proposte = []
+    monkeypatch.setattr(monitor, 'riempi_buchi', rotto)
+    monkeypatch.setattr(monitor, 'controlla_proposte', lambda: proposte.append(1))
+    monitor.lavori_del_mattino([])
+    assert proposte == [1]
+
+
+def test_errore_nel_giro_dice_tipo_e_riga(monitor, monkeypatch, capsys):
+    def rotto():
+        return {}['isin']
+
+    monkeypatch.setattr(monitor, 'giro', rotto)
+    monitor.monitora(ignora_orario=True, giri=1)
+    assert "ERRORE: Errore nel giro: KeyError: 'isin' (test_monitor.py:" in capsys.readouterr().out

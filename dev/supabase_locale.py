@@ -2,8 +2,8 @@
 
     ~/.venvs/bird-audio-suite/bin/python dev/supabase_locale.py [--azzera]
 
-Avvia un Postgres incorporato (pgserver) con le tabelle watchlist e prezzi prese da
-MyFinance/supabase/schema.sql, PostgREST sopra (la stessa API REST di Supabase, con al
+Avvia un Postgres incorporato (pgserver) con le tabelle watchlist, prezzi e investimenti
+prese da MyFinance/supabase/schema.sql, PostgREST sopra (la stessa API REST di Supabase, con al
 massimo 1000 righe per richiesta) e un piccolo proxy su http://127.0.0.1:54331 che,
 come Supabase, accetta la chiave nell'header apikey. Poi, in un altro terminale:
 
@@ -19,6 +19,7 @@ import hashlib
 import hmac
 import json
 import shutil
+import signal
 import subprocess
 import sys
 import tarfile
@@ -64,14 +65,20 @@ def jwt(claims: dict) -> str:
 
 
 def schema_isin_monitor() -> str:
-    """Il blocco di schema.sql dalla watchlist a serie_prezzi (più i permessi locali)."""
+    """I blocchi di schema.sql che usa ISIN Monitor: il registro investimenti (per carico e
+    operazioni nei grafici) e dalla watchlist a serie_prezzi, più i permessi locali."""
     # MyFinance è accanto a ISIN Monitor (cercato anche più su, per i worktree di git)
     cartella = next(p for p in Path(__file__).resolve().parents
                     if (p / 'MyFinance' / 'supabase' / 'schema.sql').exists())
     testo = (cartella / 'MyFinance' / 'supabase' / 'schema.sql').read_text(encoding='utf-8')
+    investimenti = testo[testo.index('create table if not exists public.investimenti'):
+                         testo.index('-- Quotazioni delle posizioni')]
+    colonne = [riga for riga in testo.splitlines()
+               if riga.startswith('alter table public.investimenti add column')]
     inizio = testo.index('create table if not exists public.watchlist')
     fine = testo.index('-- Conto Fineco')
-    return testo[inizio:fine] + '\ngrant all on all tables in schema public to service_role;\n'
+    return (investimenti + '\n'.join(colonne) + '\n' + testo[inizio:fine]
+            + '\ngrant all on all tables in schema public to service_role;\n')
 
 
 def avvia_postgrest(server) -> subprocess.Popen:
@@ -158,12 +165,19 @@ def main():
     postgrest = avvia_postgrest(server)
     print(f'Supabase locale pronto: SUPABASE_URL=http://127.0.0.1:{PORTA} SUPABASE_SECRET_KEY={CHIAVE}', flush=True)
     print(f'psql: {server.get_uri()}', flush=True)
+    # Fermato con kill (o da un'altra sessione) come con Ctrl+C: si spengono anche
+    # PostgREST e Postgres, che altrimenti resterebbero accesi
+    signal.signal(signal.SIGTERM, signal.default_int_handler)
     try:
         ThreadingHTTPServer(('127.0.0.1', PORTA), Proxy).serve_forever()
     except KeyboardInterrupt:
         pass
     finally:
         postgrest.terminate()
+        # pgserver non lo ferma sempre da solo all'uscita
+        from pgserver._commands import POSTGRES_BIN_PATH
+        subprocess.run([str(POSTGRES_BIN_PATH / 'pg_ctl'), 'stop', '-m', 'fast', '-D',
+                        str(CARTELLA / 'pgdata')], stdout=subprocess.DEVNULL, check=False)
 
 
 if __name__ == '__main__':

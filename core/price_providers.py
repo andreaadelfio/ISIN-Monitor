@@ -15,6 +15,10 @@ from .profiler import profile
 # Un titolo senza scheda su Borsa Italiana (ISIN sbagliato o non quotato a Milano) si
 # riprova dopo questi secondi, invece che a ogni giro: meno richieste e meno righe nel log
 RIPROVA_SENZA_SCHEDA = 600
+# Il prezzo è in <span class="... -formatPrice"><strong>20,31</strong>; prima
+# dell'apertura il <strong> è vuoto
+PREZZO = re.compile(r'-formatPrice[^>]*>\s*<strong[^>]*>([^<]+)</strong>', re.IGNORECASE)
+PREZZO_VUOTO = re.compile(r'-formatPrice[^>]*>\s*<strong[^>]*>\s*</strong>', re.IGNORECASE)
 
 
 class BorsaItalianaProvider:
@@ -26,10 +30,16 @@ class BorsaItalianaProvider:
         self.session = requests.Session()
         # La pagina finale di ogni ISIN (es. .../US4581401001-BGEM.html), per saltare il redirect
         self._url_finale: Dict[str, str] = {}
-        # True dopo una risposta 429: Borsa Italiana chiede di rallentare
+        # True dopo una risposta 429 o 403: Borsa Italiana chiede di rallentare
         self.troppe_richieste = False
+        # True se l'ultima lettura non ha avuto risposta (rete giù, timeout, errore del server)
+        self.non_risponde = False
         # ISIN senza scheda -> quando riprovarli (time.monotonic())
         self._senza_scheda: Dict[str, float] = {}
+
+    def scheda(self, isin: str) -> str:
+        """L'indirizzo della scheda del titolo (quello ricordato, se c'è già stata una lettura)."""
+        return self._url_finale.get(isin) or f"https://www.borsaitaliana.it/borsa/azioni/scheda/{isin}.html"
 
     @profile()
     def get_price(self, isin: str) -> Tuple[Optional[float], Optional[str]]:
@@ -39,12 +49,17 @@ class BorsaItalianaProvider:
 
     def _fetch_data_for_isin(self, isin: str) -> Tuple[Optional[float], Optional[str], Optional[datetime]]:
         """Recupera prezzo e nome azienda per un ISIN in una singola richiesta."""
+        self.non_risponde = False
         if self._senza_scheda.get(isin, 0) > time.monotonic():
             return None, None, None
 
+        # Azioni, azioni estere, ETF e BTP: ognuno ha la sua scheda (le altre rimandano
+        # al listino A-Z). Dopo la prima lettura vale l'indirizzo ricordato
         markets = [
             ("italiano", f"https://www.borsaitaliana.it/borsa/azioni/scheda/{isin}.html"),
-            ("globale", f"https://www.borsaitaliana.it/borsa/azioni/global-equity-market/scheda/{isin}.html")
+            ("globale", f"https://www.borsaitaliana.it/borsa/azioni/global-equity-market/scheda/{isin}.html"),
+            ("etf", f"https://www.borsaitaliana.it/borsa/etf/scheda/{isin}.html"),
+            ("btp", f"https://www.borsaitaliana.it/borsa/obbligazioni/mot/btp/scheda/{isin}.html"),
         ]
         if isin in self._url_finale:
             markets.insert(0, ("ultima pagina", self._url_finale[isin]))
@@ -59,7 +74,8 @@ class BorsaItalianaProvider:
         for market_type, url in markets:
             try:
                 response = self.session.get(url, headers=headers, timeout=self.timeout)
-                if response.status_code == 429:
+                if response.status_code in (403, 429):
+                    # 429 troppe richieste, 403 bloccati: si smette e si fa una pausa
                     self.troppe_richieste = True
                     return None, None, None
                 if response.status_code == 200:
@@ -72,9 +88,17 @@ class BorsaItalianaProvider:
                     if price is not None:
                         self._url_finale[isin] = response.url
                         return price, company_name, datetime.now()
+                    if '/scheda/' in response.url and PREZZO_VUOTO.search(html_content):
+                        # La scheda c'è ma ancora senza prezzo (prima dell'apertura, o nessun
+                        # contratto oggi): niente errore e niente altre pagine
+                        self._url_finale[isin] = response.url
+                        return None, company_name, None
                     if '/scheda/' in response.url:
+                        # La scheda c'è ma il prezzo non si legge (pagina cambiata?): le altre
+                        # pagine non andrebbero meglio
                         errori.append(f"{market_type}: prezzo non trovato")
                         definitivo = False
+                        break
                     else:
                         # Un ISIN sconosciuto finisce sul listino A-Z
                         errori.append(f"{market_type}: nessuna scheda")
@@ -83,50 +107,34 @@ class BorsaItalianaProvider:
                     if response.status_code != 404:
                         # Errore del server: le altre pagine non andrebbero meglio
                         definitivo = False
+                        self.non_risponde = True
                         break
 
             except Exception as e:
                 # Rete giù o timeout: provare le altre pagine costerebbe altri timeout
                 errori.append(f"{market_type}: {e.__class__.__name__}")
                 definitivo = False
+                self.non_risponde = True
                 break
 
         if definitivo:
             # Nessuna scheda (non un problema di rete o della pagina): si riprova più tardi
             self._senza_scheda[isin] = time.monotonic() + RIPROVA_SENZA_SCHEDA
+            self._url_finale.pop(isin, None)   # la pagina ricordata non c'è più
             print(f"❌ Nessun prezzo per ISIN {isin} ({'; '.join(errori)}): "
                   f"riprovo fra {RIPROVA_SENZA_SCHEDA // 60} minuti")
         else:
             print(f"❌ Nessun prezzo per ISIN {isin} ({'; '.join(errori)})")
         return None, None, None
 
-    def _extract_price_from_html(self, html_content):
-        """Estrae il prezzo dal contenuto HTML usando il metodo formatPrice."""
-        try:
-            # Metodo principale: cerca formatPrice + strong
-            pattern = r'-formatPrice[^>]*>\s*<strong[^>]*>([^<]+)</strong>'
-            matches = re.findall(pattern, html_content, re.IGNORECASE)
-            
-            if matches:
-                price_text = matches[0].strip()
-                price = self._parse_price_string(price_text)
-                if price is not None:
-                    return price
-            
-            # Metodo fallback: cerca strong generici con numeri
-            strong_pattern = r'<strong[^>]*>([0-9]+[,\.][0-9]+)</strong>'
-            strong_matches = re.findall(strong_pattern, html_content)
-            
-            for match in strong_matches:
-                price = self._parse_price_string(match)
-                if price is not None and 0.001 <= price <= 100000:
-                    return price
-            
-            return None
-        
-        except Exception as e:
-            print(f"❌ Errore estrazione prezzo: {e}")
-            return None
+    def _extract_price_from_html(self, html_content: str) -> Optional[float]:
+        """Il prezzo della scheda (formatPrice), o None.
+
+        Niente ripieghi su altri numeri della pagina: se Borsa Italiana cambia la pagina,
+        meglio nessun prezzo (e l'errore nel log) che un prezzo sbagliato nello storico.
+        """
+        trovato = PREZZO.search(html_content)
+        return self._parse_price_string(trovato.group(1).strip()) if trovato else None
 
     def _extract_company_name_from_html(self, html_content: str) -> Optional[str]:
         """Estrae il nome dell'azienda dal contenuto HTML di Borsa Italiana."""

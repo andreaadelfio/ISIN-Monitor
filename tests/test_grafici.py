@@ -212,3 +212,19 @@ def test_figura_chiusa_anche_se_il_disegno_fallisce(monkeypatch):
         ChartGenerator().create_comprehensive_chart('Prova', 4.0, None, [], RECENTE.iloc[-1:],
                                                     RECENTE, GIORNALIERO, ADESSO)
     assert plt.get_fignums() == []
+
+
+def test_oggi_tacche_dell_ora_senza_avvisi_di_matplotlib():
+    import warnings
+    from datetime import timedelta
+    for minuti in (10, 200, 210, 550):        # 200-210: prima matplotlib avvisava
+        inizio = datetime(2026, 10, 27, 8, 55)
+        oggi = tabella((inizio, 10), (inizio + timedelta(minutes=minuti), 11))
+        asse = plt.figure().add_subplot()
+        adesso = inizio + timedelta(minutes=minuti)
+        ChartGenerator()._plot_oggi(asse, oggi, adesso, 11.0)
+        with warnings.catch_warnings():
+            warnings.simplefilter('error')
+            asse.figure.canvas.draw()
+        assert 4 <= len(asse.get_xticks()) <= 9
+        plt.close(asse.figure)

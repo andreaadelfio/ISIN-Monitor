@@ -16,7 +16,9 @@ Yahoo i buchi dello storico e manda i cambiamenti delle proposte di MyFinance.
 import queue
 import threading
 import time
+import traceback
 from datetime import date, datetime, timedelta
+from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 from zoneinfo import ZoneInfo
 
@@ -41,10 +43,24 @@ MAX_IN_SOSPESO = 50000
 RIFIUTATI = (400, 409, 422)
 # Variazione in % (rispetto all'ultimo prezzo salvato) da confermare al giro dopo
 SALTO_SOSPETTO = 20
+# Secondi fra una riga di log e l'altra quando Supabase è giù
+LOG_OFFLINE = 300
+# Un avviso più vecchio di così (rimasto in coda con Telegram giù) non si manda più
+MAX_RITARDO_AVVISO = timedelta(minutes=30)
 # Attesa massima chiesta da Telegram (retry_after) per riprovare un invio
 MAX_ATTESA_TELEGRAM = 120
 # Pausa dopo una risposta 429 (troppe richieste) di Borsa Italiana
 PAUSA_429 = 60
+
+
+def descrivi(errore: Exception) -> str:
+    """Tipo, messaggio e punto del codice di un errore: dal solo messaggio (es. 'isin')
+    nel log non si capirebbe cosa è successo."""
+    testo = f"{errore.__class__.__name__}: {errore}"
+    if errore.__traceback__:
+        riga = traceback.extract_tb(errore.__traceback__)[-1]
+        testo += f" ({Path(riga.filename).name}:{riga.lineno})"
+    return testo
 
 
 def titolo_da_riga(riga: Dict) -> Dict:
@@ -90,13 +106,16 @@ class ISINMonitor:
         self.db = Database.da_configurazione(config)
         self.online = False  # True se la lista dei titoli è arrivata da Supabase
         self.irraggiungibile = False  # True se in questo giro Supabase non ha risposto (rete)
-        timeout = config.get('api', {}).get('request_timeout', 10)
-        self.borsa = BorsaItalianaProvider(timeout)
+        self.log_offline = True  # False nei giri in cui le righe di Supabase giù si saltano
+        self._ultimo_log_offline = float('-inf')  # time.monotonic() dell'ultima volta
+        # Borsa Italiana risponde in meno di un secondo: un timeout lungo farebbe sforare il giro
+        self.borsa = BorsaItalianaProvider(config.get('api', {}).get('borsa_timeout', 5))
         self.yahoo = YahooFinanceProvider(config.get('yahoo', {}))
         self.myfinance_url = config.get('myfinance_url', MYFINANCE_URL)
         self._chart_generator = None
         self.ultimo_mattino: Optional[str] = None  # giorno dei lavori del mattino prima di oggi
         self._sospetti: Dict[str, float] = {}  # ISIN -> prezzo con un salto da confermare
+        self.richiesta_piu_lenta = ('', 0.0)  # la richiesta a Borsa più lenta dell'ultimo giro
 
     @property
     def chart_generator(self):
@@ -117,17 +136,30 @@ class ISINMonitor:
         """La watchlist da Supabase (salvata anche in locale); se non risponde, l'ultima salvata."""
         self.online = False
         self.irraggiungibile = False
+        errore_db = None
         if self.db:
             try:
                 titoli = [titolo_da_riga(riga) for riga in self.db.titoli()]
                 self.online = True
             except ErroreDatabase as errore:
-                print(f"⚠️ {errore}")
+                errore_db = errore
                 self.irraggiungibile = errore.status is None
+            except ValueError:
+                # Risposta 200 ma non JSON (es. la pagina d'errore di un proxy)
+                errore_db = "Supabase: risposta non valida (non JSON)"
         if not self.online:
             titoli = stato.leggi('titoli.json', [])
-            print(f"⚠️ Uso l'ultima lista salvata ({len(titoli)} titoli)")
+            # Con Supabase giù le stesse righe a ogni giro: la prima volta e poi ogni 5 minuti
+            self.log_offline = time.monotonic() - self._ultimo_log_offline >= LOG_OFFLINE
+            if self.log_offline:
+                self._ultimo_log_offline = time.monotonic()
+                if errore_db:
+                    print(f"⚠️ {errore_db}")
+                print(f"⚠️ Uso l'ultima lista salvata ({len(titoli)} titoli)")
             return titoli
+        if self._ultimo_log_offline != float('-inf'):
+            print("✅ Supabase di nuovo raggiungibile")
+            self._ultimo_log_offline = float('-inf')
 
         # I prezzi non ancora scritti nel database sono più recenti dell'ultimo salvato.
         # Le ore si confrontano come date: Supabase le dà in UTC, il monitor con il fuso di Roma
@@ -163,32 +195,47 @@ class ISINMonitor:
                     stato.scrivi('prezzi_in_sospeso.json', [])
                     return
         stato.scrivi('prezzi_in_sospeso.json', righe[-MAX_IN_SOSPESO:])
-        print(f"⚠️ {len(righe)} prezzi in sospeso: li scrivo al prossimo giro")
+        if self.online or self.log_offline:
+            print(f"⚠️ {len(righe)} prezzi in sospeso: li scrivo al prossimo giro")
 
     def leggi_prezzi(self, titoli: List[Dict], durata: float = INTERVALLO * 0.8) -> List[tuple]:
         """(prezzo o None, ora della lettura) di ogni titolo da Borsa Italiana.
 
         Le richieste sono distribuite su `durata` secondi, una ogni durata/N: Borsa Italiana
-        risponde 429 (troppe richieste) alle raffiche. Dopo un 429 il giro si interrompe.
+        risponde 429 (troppe richieste) alle raffiche. Dopo una risposta lenta le successive
+        recuperano il ritardo a mezzo passo l'una dall'altra. Dopo un 429 il giro si
+        interrompe, e anche dopo due titoli di fila senza risposta (rete giù: ogni timeout
+        costa secondi).
         """
         self.borsa.troppe_richieste = False
         passo = durata / len(titoli)
-        prossima = time.monotonic()
+        inizio = time.monotonic()
+        prossima = inizio
         letture = []
-        for titolo in titoli:
-            if self.borsa.troppe_richieste:
+        senza_risposta = saltati = 0
+        self.richiesta_piu_lenta = ('', 0.0)  # (ISIN, secondi), per il log dei giri lenti
+        for indice, titolo in enumerate(titoli):
+            if self.borsa.troppe_richieste or senza_risposta >= 2:
                 letture.append((None, None))
+                saltati += 1
                 continue
             attesa = prossima - time.monotonic()
             if attesa > 0:
                 time.sleep(attesa)
-            # Il passo conta dall'inizio di questa richiesta: dopo una risposta lenta le
-            # richieste dopo restano distanziate (il giro dura di più) invece di partire a raffica
-            prossima = time.monotonic() + passo
+            # Dopo una risposta lenta si recupera il ritardo (così il giro resta, se si può,
+            # nei 15 secondi), ma con almeno mezzo passo fra due richieste: niente raffiche
+            partenza = time.monotonic()
+            prossima = max(inizio + (indice + 1) * passo, partenza + passo / 2)
             prezzo, _ = self.borsa.get_price(titolo['isin'])
+            secondi = time.monotonic() - partenza
+            if secondi > self.richiesta_piu_lenta[1]:
+                self.richiesta_piu_lenta = (titolo['isin'], secondi)
             letture.append((prezzo, datetime.now(ROMA).replace(microsecond=0)))
+            senza_risposta = senza_risposta + 1 if self.borsa.non_risponde else 0
         if self.borsa.troppe_richieste:
-            print("⚠️ Borsa Italiana: troppe richieste (429), giro interrotto")
+            print("⚠️ Borsa Italiana: troppe richieste (429 o 403), giro interrotto")
+        elif saltati:
+            print("⚠️ Borsa Italiana non risponde (rete o server): giro interrotto, riprovo al prossimo")
         return letture
 
     def esamina(self, titolo: Dict, prezzo: float, adesso: datetime,
@@ -231,13 +278,16 @@ class ISINMonitor:
         """
         inizio = time.monotonic()
         titoli = self.carica_titoli()
+        supabase = time.monotonic() - inizio
         if not titoli:
             print("⚠️ Nessun titolo da controllare!")
             return [], []
 
         adesso = datetime.now(ROMA).replace(microsecond=0)
         nuovi, avvisi, letti = [], [], 0
-        for titolo, (prezzo, letto_alle) in zip(titoli, self.leggi_prezzi(titoli)):
+        letture = self.leggi_prezzi(titoli)
+        borsa = time.monotonic() - inizio - supabase
+        for titolo, (prezzo, letto_alle) in zip(titoli, letture):
             if prezzo is None:
                 continue
             letti += 1
@@ -247,12 +297,21 @@ class ISINMonitor:
             if avviso:
                 avvisi.append(avviso)
 
+        prima_di_salvare = time.monotonic()
         self.salva_prezzi(nuovi, titoli)
+        supabase += time.monotonic() - prima_di_salvare
         stato.scrivi('titoli.json', titoli)
         cambiati = ', '.join(f"{t.get('simbolo_borsa') or t['nome']} {t['ultimo_prezzo']:g}"
                              for t in titoli if t['isin'] in {riga['isin'] for riga in nuovi})
+        durata = time.monotonic() - inizio
+        # Un giro oltre i 15 secondi salta il successivo: si dice chi l'ha rallentato
+        lento = ''
+        if durata > INTERVALLO:
+            isin, secondi = self.richiesta_piu_lenta
+            lento = (f": Borsa {borsa:.1f} s (più lenta {isin} {secondi:.1f} s), "
+                     f"Supabase {supabase:.1f} s")
         print(f"🔍 {adesso:%H:%M:%S} {letti}/{len(titoli)} prezzi, {len(nuovi)} nuovi, "
-              f"{len(avvisi)} avvisi ({time.monotonic() - inizio:.1f} s)"
+              f"{len(avvisi)} avvisi ({durata:.1f} s{lento})"
               + (f": {cambiati}" if cambiati else ''))
         return titoli, avvisi
 
@@ -286,10 +345,11 @@ class ISINMonitor:
         coda: queue.Queue = queue.Queue()
         threading.Thread(target=self._spedisci_avvisi, args=(coda,), daemon=True).start()
         mattino = None
-        fatti = 0
+        fatti = errori = mandati = 0
         while ignora_orario or in_orario(self.config['monitoring'], datetime.now()):
             try:
                 titoli, avvisi = self.giro()
+                mandati += len(avvisi)
                 for avviso in avvisi:
                     coda.put(avviso)
                 if self.mattino_da_fare():
@@ -297,7 +357,8 @@ class ISINMonitor:
                                                daemon=True)
                     mattino.start()
             except Exception as errore:
-                print(f"ERRORE: Errore nel giro: {errore}")
+                print(f"ERRORE: Errore nel giro: {descrivi(errore)}")
+                errori += 1
             fatti += 1
             if self.borsa.troppe_richieste:
                 print(f"⏸️ Pausa di {PAUSA_429} s per non farsi bloccare da Borsa Italiana")
@@ -306,19 +367,29 @@ class ISINMonitor:
                 break
             time.sleep(secondi_al_prossimo_giro(datetime.now()))
 
-        print("⏹️ Fine dei giri (fuori orario): finisco gli avvisi in coda ed esco")
+        print(f"⏹️ Fine dei giri: {fatti} giri ({errori} con errori), {mandati} avvisi; "
+              f"finisco quelli in coda ed esco")
         coda.join()
         if mattino:
             mattino.join()
 
     def _spedisci_avvisi(self, coda: queue.Queue) -> None:
-        """Thread degli avvisi: uno alla volta, nell'ordine in cui arrivano."""
+        """Thread degli avvisi: uno alla volta, nell'ordine in cui arrivano.
+
+        Un avviso rimasto in coda troppo a lungo (Telegram giù per ore) non si manda più:
+        arriverebbe insieme a tutti gli altri, con un prezzo ormai vecchio.
+        """
         while True:
             avviso = coda.get()
             try:
+                ritardo = datetime.now(ROMA) - avviso['adesso']
+                if ritardo > MAX_RITARDO_AVVISO:
+                    print(f"⏭️ Avviso per {avviso['titolo']['nome']} delle {avviso['adesso']:%H:%M} "
+                          f"non mandato: troppo vecchio")
+                    continue
                 self.invia_avviso(**avviso)
             except Exception as errore:
-                print(f"ERRORE: Avviso non mandato per {avviso['titolo']['isin']}: {errore}")
+                print(f"ERRORE: Avviso non mandato per {avviso['titolo']['isin']}: {descrivi(errore)}")
             finally:
                 coda.task_done()
 
@@ -403,10 +474,11 @@ class ISINMonitor:
             png, tabella = self.grafico(titolo, prezzo, precedente, adesso,
                                         self.config['telegram'].get('send_charts', True))
         except Exception as errore:
-            print(f"❌ Errore generazione grafico per {titolo['isin']}: {errore}")
+            print(f"❌ Errore generazione grafico per {titolo['isin']}: {descrivi(errore)}")
         if tabella is None:
             tabella = TableDataGenerator.generate_table_data(prezzo, previous_price=precedente)
-        caption = CaptionTemplates.format_caption(titolo, prezzo, tabella, link)
+        caption = CaptionTemplates.format_caption(titolo, prezzo, tabella, link,
+                                                  self.borsa.scheda(titolo['isin']))
 
         if png and self.send_telegram_photo(png, caption, f"isin_chart_{titolo['isin']}.png"):
             print(f"📨 Grafico inviato per {titolo['nome']}")
@@ -427,10 +499,14 @@ class ISINMonitor:
             lontano = prima is not None and (adesso.date() - date.fromisoformat(prima)).days > 6
             if lontano:
                 print(f"🧳 Ultimo avvio il {prima}: riempio tutto lo storico, non solo 7 giorni")
-            self.riempi_buchi(titoli, adesso, completo=lontano)
+            try:
+                self.riempi_buchi(titoli, adesso, completo=lontano)
+            except Exception as errore:
+                # Un errore imprevisto nello storico non deve fermare le proposte
+                print(f"ERRORE: Riempimento dello storico interrotto: {errore}")
         try:
             self.controlla_proposte()
-        except ErroreDatabase as errore:
+        except (ErroreDatabase, ValueError) as errore:
             print(f"⚠️ Proposte non controllate: {errore}")
 
     def riempi_buchi(self, titoli: List[Dict], adesso: datetime, completo: bool = False,
@@ -487,6 +563,7 @@ class ISINMonitor:
         print(f"🧪 Test: controllo {titolo['nome']} con soglia 0")
         prezzo, _ = self.borsa.get_price(titolo['isin'])
         if prezzo is None:
+            print(f"❌ Nessun prezzo per {titolo['nome']} (borsa non ancora aperta?): niente avviso")
             return
         _, avviso = self.esamina(titolo, prezzo, datetime.now(ROMA).replace(microsecond=0), soglia=0)
         if avviso:

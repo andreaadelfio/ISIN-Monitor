@@ -437,17 +437,23 @@ class ChartGenerator:
         etichetta = 'Oggi' if variazione is None else f'Oggi {prima_cifra(variazione)}%'
         linea, = axis.plot(dati['ts'], dati['prezzo'], color=colore, linewidth=1.5, label=etichetta)
         axis.scatter(dati['ts'], dati['prezzo'], c=colori, s=14, alpha=0.8)
-        axis.scatter([dati['ts'].iloc[0]], [apertura], color='green', s=70, marker='^', zorder=5)
-        axis.scatter([dati['ts'].iloc[-1]], [dati['prezzo'].iloc[-1]], color='red', s=70,
-                     marker='v', zorder=5)
+        # Apertura e prezzo attuale sono punti, come negli altri pannelli: i triangoli
+        # restano solo per i tuoi acquisti e vendite
+        axis.scatter([dati['ts'].iloc[0]], [apertura], color='green', s=50, zorder=5,
+                     edgecolor='darkgreen', linewidth=1.5)
+        axis.scatter([dati['ts'].iloc[-1]], [dati['prezzo'].iloc[-1]], color='red', s=50,
+                     zorder=5, edgecolor='darkred', linewidth=1.5)
 
         locator = mdates.AutoDateLocator(minticks=4, maxticks=8)
+        # Con i soli passi standard (15, 30 minuti, 1 ora) fra le 3 e le 3 ore e mezza di
+        # seduta nessuno dà 4-8 tacche: matplotlib avvisa nel log e le sceglie male
+        locator.intervald[mdates.MINUTELY] = [1, 2, 5, 10, 15, 20, 30, 45]
         axis.xaxis.set_major_locator(locator)
         axis.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M'))
         inizio, fine = dati['ts'].iloc[0], dati['ts'].iloc[-1]
         if fine - inizio < timedelta(minutes=10):
             inizio, fine = inizio - timedelta(minutes=5), fine + timedelta(minutes=5)
-        margine = (fine - inizio) * 0.015   # i triangoli di apertura e ultimo prezzo interi
+        margine = (fine - inizio) * 0.015   # i punti di apertura e ultimo prezzo interi
         axis.set_xlim(inizio - margine, fine + margine)
         voci = _voce_carico(axis, carico, dati['prezzo'])
         axis.legend(handles=[linea, *voci], frameon=False, loc='upper left',
