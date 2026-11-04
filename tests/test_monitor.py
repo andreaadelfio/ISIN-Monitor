@@ -640,3 +640,39 @@ def test_cooldown_da_config(config):
     from datetime import timedelta
     config['monitoring']['cooldown_minuti'] = 0
     assert ISINMonitor(config).cooldown == timedelta(0)
+
+
+def test_errore_di_telegram_ricordato_senza_token(config, monkeypatch, capsys):
+    config['telegram']['bot_token'] = '123:SEGRETO'
+    istanza = ISINMonitor(config)
+
+    class Risposta:
+        def json(self):
+            return {'ok': False, 'error_code': 409,
+                    'description': "Conflict: can't use getUpdates method while webhook is active"}
+
+    monkeypatch.setattr(modulo_app.requests, 'post', lambda *a, **k: Risposta())
+    assert istanza.chiama_telegram('getUpdates', silenzioso=True, data={}) is None
+    assert istanza.errore_telegram == "Conflict: can't use getUpdates method while webhook is active (409)"
+    assert capsys.readouterr().out == ''                      # silenzioso: lo scrive ascolta
+    assert 'SEGRETO' not in istanza.errore_telegram
+
+
+def test_stato_del_bot_con_webhook(monitor, monkeypatch, capsys):
+    chiamate = []
+    risposte = {'getMe': {'username': 'ISINMonitorBot', 'first_name': 'ISIN Monitor'},
+                'getWebhookInfo': {'url': 'https://altro.example.com/hook/segreto', 'pending_update_count': 3},
+                'deleteWebhook': True}
+
+    def chiama(metodo, **kwargs):
+        chiamate.append(metodo)
+        return risposte[metodo]
+
+    monkeypatch.setattr(monitor, 'chiama_telegram', chiama)
+    monitor.stato_telegram()
+    uscita = capsys.readouterr().out
+    assert '@ISINMonitorBot' in uscita and 'Webhook attivo verso altro.example.com' in uscita
+    assert 'segreto' not in uscita and 'Messaggi in attesa: 3' in uscita
+    assert 'deleteWebhook' not in chiamate                   # di suo non toglie niente
+    monitor.stato_telegram(togli_webhook=True)
+    assert chiamate[-2:] == ['deleteWebhook', 'getWebhookInfo']

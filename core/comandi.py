@@ -175,6 +175,17 @@ def gestisci(monitor, coda, aggiornamenti: List[Dict], avvio: float) -> Optional
     return offset
 
 
+def consiglio(errore: str) -> str:
+    """Cosa fare per i due errori di getUpdates che capitano davvero (409 di Telegram)."""
+    if 'webhook' in errore:
+        return ("; il bot ha un webhook (lo usa un altro programma?): ./setup.sh telegram lo "
+                "mostra, ./setup.sh telegram togli-webhook lo toglie")
+    if 'other getUpdates' in errore:
+        return ("; un altro programma legge i messaggi con lo stesso bot (un altro ISIN Monitor, "
+                "su un altro PC?): va fermato, un bot si legge da un posto solo")
+    return ''
+
+
 def ascolta(monitor, coda) -> None:
     """Thread dei comandi: legge i messaggi del bot finché il monitor è acceso."""
     avvio = time.time()
@@ -182,18 +193,19 @@ def ascolta(monitor, coda) -> None:
     monitor.chiama_telegram('setMyCommands', silenzioso=True, data={'commands': json.dumps(
         [{'command': comando, 'description': descrizione} for comando, descrizione in COMANDI])})
     offset = None
-    funziona = True
+    errore = ''   # l'errore già scritto nel log: si riscrive solo se cambia
     while True:
         aggiornamenti = monitor.chiama_telegram(
             'getUpdates', timeout=40, silenzioso=True,
             data={'timeout': 30, 'offset': offset, 'allowed_updates': json.dumps(['message'])})
         if aggiornamenti is None:
-            if funziona:
-                print("⚠️ Comandi del bot: Telegram non risponde, riprovo ogni 30 secondi")
-                funziona = False
+            if monitor.errore_telegram != errore:
+                errore = monitor.errore_telegram
+                print(f"⚠️ Comandi del bot non attivi, Telegram dice: {errore}. "
+                      f"Riprovo ogni 30 secondi{consiglio(errore)}")
             time.sleep(30)
             continue
-        if not funziona:
+        if errore:
             print("✅ Comandi del bot di nuovo attivi")
-            funziona = True
+            errore = ''
         offset = gestisci(monitor, coda, aggiornamenti, avvio) or offset

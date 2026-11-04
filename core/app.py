@@ -116,6 +116,7 @@ class ISINMonitor:
         self.ultimo_mattino: Optional[str] = None  # giorno dei lavori del mattino prima di oggi
         self._sospetti: Dict[str, float] = {}  # ISIN -> prezzo con un salto da confermare
         # Pausa fra due avvisi sullo stesso titolo (in memoria: dopo un riavvio si riparte)
+        self.errore_telegram = ''  # l'ultimo errore di Telegram, per il log dei comandi
         self.cooldown = timedelta(minutes=config['monitoring'].get('cooldown_minuti', 3))
         self._ultimi_avvisi: Dict[str, datetime] = {}  # ISIN -> ora dell'ultimo avviso
         self.richiesta_piu_lenta = ('', 0.0)  # la richiesta a Borsa più lenta dell'ultimo giro
@@ -634,6 +635,34 @@ class ISINMonitor:
         totale = self.riempi_buchi(titoli, datetime.now(ROMA), completo=True, scrivi=scrivi)
         print(f"✅ {totale} punti Yahoo {'aggiunti' if scrivi else 'da aggiungere (prova)'}")
 
+    def stato_telegram(self, togli_webhook: bool = False) -> None:
+        """Lo stato del bot per capire perché i comandi non vanno: nome, webhook, errori.
+
+        Non manda messaggi e non legge i comandi (getUpdates li toglierebbe al monitor).
+        Il token non si stampa; del webhook solo il nome del server.
+        """
+        if not self.telegram_configured:
+            print("❌ Telegram non configurato!")
+            return
+        bot = self.chiama_telegram('getMe')
+        if bot is None:
+            return
+        print(f"🤖 Bot: @{bot.get('username')} ({bot.get('first_name')})")
+        if togli_webhook and self.chiama_telegram('deleteWebhook', data={'drop_pending_updates': False}):
+            print("🗑️ Webhook tolto: i comandi del bot ripartono al prossimo tentativo (entro 30 s)")
+        info = self.chiama_telegram('getWebhookInfo') or {}
+        if info.get('url'):
+            from urllib.parse import urlparse
+            print(f"🔗 Webhook attivo verso {urlparse(info['url']).netloc}: Telegram manda lì i "
+                  f"messaggi e i comandi di ISIN Monitor non funzionano. Se quel programma non "
+                  f"ti serve più: ./setup.sh telegram togli-webhook")
+        else:
+            print("🔗 Nessun webhook: i comandi li legge ISIN Monitor (getUpdates)")
+        print(f"📬 Messaggi in attesa: {info.get('pending_update_count', 0)}")
+        if info.get('last_error_message'):
+            quando = datetime.fromtimestamp(info.get('last_error_date', 0), ROMA)
+            print(f"⚠️ Ultimo errore del webhook ({quando:%d/%m %H:%M}): {info['last_error_message']}")
+
     def test_telegram(self) -> None:
         if not self.telegram_configured:
             print("❌ Telegram non configurato!")
@@ -694,6 +723,7 @@ class ISINMonitor:
                 dati = risposta.json()
             except (requests.RequestException, ValueError) as errore:
                 # Il messaggio di requests contiene l'URL con il token: non si stampa
+                self.errore_telegram = f"non raggiungibile ({errore.__class__.__name__})"
                 if not silenzioso:
                     print(f"ERRORE: Telegram non raggiungibile ({errore.__class__.__name__})")
                 return None
@@ -706,6 +736,8 @@ class ISINMonitor:
                 time.sleep(attesa)
                 continue
             break
+        # La risposta di Telegram (es. "Conflict: ..." 409), senza l'URL col token
+        self.errore_telegram = f"{dati.get('description', 'errore sconosciuto')} ({dati.get('error_code')})"
         if not silenzioso:
             print(f"ERRORE: Errore nell'invio Telegram: {dati.get('description', 'sconosciuto')}")
         return None

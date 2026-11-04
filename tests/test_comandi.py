@@ -37,6 +37,7 @@ class MonitorFinto:
         self.avviato = datetime(2026, 11, 4, 8, 55, tzinfo=ROMA)
         self.ultimo_giro = (datetime(2026, 11, 4, 10, 32, 15, tzinfo=ROMA), 17, 18)
         self.giri_fatti, self.avvisi_di_oggi = 1500, 12
+        self.errore_telegram = ''
         self.messaggi = []
 
     def send_telegram_message(self, testo, anteprima=True):
@@ -119,7 +120,11 @@ def test_solo_la_chat_di_andrea_e_niente_comandi_vecchi():
     assert offset == 14 and len(monitor.messaggi) == 1 and 'acceso' in monitor.messaggi[0]
 
 
-def test_ascolta_menu_offset_e_telegram_giu(monkeypatch, capsys):
+WEBHOOK = ("Conflict: can't use getUpdates method while webhook is active; "
+           "use deleteWebhook to delete the webhook first (409)")
+
+
+def test_ascolta_menu_offset_e_webhook_attivo(monkeypatch, capsys):
     import pytest
     monitor = MonitorFinto()
     chiamate = []
@@ -132,7 +137,10 @@ def test_ascolta_menu_offset_e_telegram_giu(monkeypatch, capsys):
             return True
         if not risposte:
             raise KeyboardInterrupt   # fine del test
-        return risposte.pop(0)
+        risposta = risposte.pop(0)
+        if risposta is None:   # come chiama_telegram quando Telegram risponde 409
+            monitor.errore_telegram = WEBHOOK
+        return risposta
 
     monitor.chiama_telegram = chiama
     monkeypatch.setattr(comandi.time, 'sleep', lambda secondi: None)
@@ -141,5 +149,15 @@ def test_ascolta_menu_offset_e_telegram_giu(monkeypatch, capsys):
     assert chiamate[0] == ('setMyCommands', None)
     assert [offset for metodo, offset in chiamate[1:]] == [None, None, None, 8, 8]
     uscita = capsys.readouterr().out
-    assert uscita.count('Telegram non risponde') == 1 and 'di nuovo attivi' in uscita
+    # L'errore vero di Telegram, una volta sola, con cosa fare; poi di nuovo attivi
+    assert uscita.count('Comandi del bot non attivi') == 1
+    assert f'Telegram dice: {WEBHOOK}' in uscita and './setup.sh telegram togli-webhook' in uscita
+    assert 'di nuovo attivi' in uscita
     assert 'Comandi di ISIN Monitor' in monitor.messaggi[0]
+
+
+def test_altro_programma_che_legge_lo_stesso_bot():
+    consiglio = comandi.consiglio('Conflict: terminated by other getUpdates request; make sure that '
+                                  'only one bot instance is running (409)')
+    assert 'un altro programma legge i messaggi con lo stesso bot' in consiglio
+    assert comandi.consiglio('non raggiungibile (ConnectionError)') == ''

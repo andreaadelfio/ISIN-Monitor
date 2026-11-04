@@ -80,6 +80,10 @@ def main():
                         help='Test: controlla il primo titolo con soglia 0 (manda sempre l\'avviso)')
     parser.add_argument('--test-telegram', action='store_true',
                         help='Manda un messaggio di prova su Telegram')
+    parser.add_argument('--telegram', action='store_true',
+                        help='Stato del bot (nome, webhook, errori), senza mandare messaggi')
+    parser.add_argument('--togli-webhook', action='store_true',
+                        help='Con --telegram: toglie il webhook del bot (serve per i comandi)')
     parser.add_argument('--grafico', metavar='ISIN',
                         help='Salva il grafico di un titolo in un PNG (senza Telegram)')
     parser.add_argument('--uscita', default='grafico.png',
@@ -118,7 +122,7 @@ def main():
             if args.monitor:
                 aspetta_la_chiusura(config['monitoring'])
             return
-    elif not (args.test_telegram or args.grafico or args.riempi_storico):
+    elif not (args.test_telegram or args.telegram or args.grafico or args.riempi_storico):
         parser.print_help()
         return
 
@@ -134,6 +138,8 @@ def main():
 
     if args.test_telegram:
         monitor.test_telegram()
+    elif args.telegram:
+        monitor.stato_telegram(togli_webhook=args.togli_webhook)
     elif args.grafico:
         monitor.salva_grafico(args.grafico, args.uscita)
     elif args.riempi_storico:

@@ -99,6 +99,12 @@ Mentre il monitor è acceso (in orario di borsa) il bot risponde, solo alla chat
 I comandi mandati a monitor spento (sera, weekend) non vengono eseguiti dopo. Per
 spegnerli: `telegram.comandi: false`.
 
+Il monitor legge i comandi con `getUpdates`, che Telegram rifiuta (errore 409) se il bot ha
+un webhook o se un altro programma legge lo stesso bot. Il webhook il monitor non lo toglie
+da solo, perché potrebbe servire a un altro programma: lo dice nel log e
+`./setup.sh telegram` mostra lo stato del bot (senza mandare messaggi né stampare il
+token); `./setup.sh telegram togli-webhook` lo toglie quando lo decidi tu.
+
 ## Dati in Supabase
 
 Lo schema è in `MyFinance/supabase/schema.sql` (si applica dall'editor SQL di Supabase):
@@ -145,6 +151,7 @@ così il timer non lo rilancia ogni 15 secondi. Le altre feste italiane (6 genna
 ```bash
 ./setup.sh status                     # stato del timer e prossimi avvii
 ./setup.sh stato                      # monitor acceso?, prezzi in sospeso, ultimo mattino
+./setup.sh telegram                   # stato del bot: nome, webhook, errori (sola lettura)
 ./setup.sh logs                       # log in tempo reale
 ./setup.sh restart | stop | start
 ./setup.sh test                       # primo titolo con soglia 0: manda sempre un avviso
@@ -270,6 +277,10 @@ tests/                test (pytest)
 - **Troppi avvisi da un titolo** (es. un titolo americano quotato a Milano, con pochi
   contratti e prezzi che saltano): alza la sua `soglia_avviso` dalla sezione ISIN Monitor
   del sito; vale dal giro dopo, senza riavviare niente.
+- **"Comandi del bot non attivi, Telegram dice: Conflict: ..."**: con "webhook is active"
+  il bot ha un webhook (`./setup.sh telegram` mostra verso dove; se non ti serve,
+  `./setup.sh telegram togli-webhook`); con "terminated by other getUpdates request" un
+  altro programma legge lo stesso bot (un altro ISIN Monitor, su un altro PC?) e va fermato.
 - **Nessun avviso**: guarda `./setup.sh logs`; fuori orario il timer non parte;
   `./setup.sh test` prova Telegram con un avviso vero.
 - **Grafici vuoti o con buchi**: `./setup.sh riempi-storico --prova` dice quanti punti

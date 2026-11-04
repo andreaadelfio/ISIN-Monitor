@@ -125,6 +125,12 @@ case "$1" in
         sudo systemctl status $TIMER_NAME $SERVICE_NAME --no-pager -l
         systemctl list-timers $TIMER_NAME --no-pager
         ;;
+    telegram)
+        # Stato del bot (nome, webhook, errori): non manda messaggi, non stampa il token
+        OPZIONE=""
+        [[ "$2" == "togli-webhook" ]] && OPZIONE="--togli-webhook"
+        cd "$CARTELLA" && "$PYTHON_BIN" monitor.py --telegram $OPZIONE
+        ;;
     stato)
         # Anche con sudo: lo stato è quello del tuo utente, non di root
         cd "$CARTELLA" && ISIN_MONITOR_STATO="$HOME_UTENTE/.local/state/isin-monitor" \
@@ -168,6 +174,7 @@ case "$1" in
         echo "  ./setup.sh stop | start       # Ferma timer e monitor / riavvia il timer"
         echo "  ./setup.sh status             # Stato del timer e prossimi avvii"
         echo "  ./setup.sh stato              # Stato locale: prezzi in sospeso, ultimo mattino"
+        echo "  ./setup.sh telegram [togli-webhook]  # Stato del bot (perché i comandi non vanno)"
         echo "  ./setup.sh logs               # Log in tempo reale"
         echo "  ./setup.sh test               # Test manuale con avviso Telegram"
         echo "  ./setup.sh grafico ISIN [file.png]   # Salva il grafico di un titolo"
