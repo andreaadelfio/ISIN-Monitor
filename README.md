@@ -40,14 +40,19 @@ PC spento) e manda su Telegram i cambiamenti delle proposte di MyFinance.
   poco scambiati a Milano (BNP, i titoli americani prima dell'apertura di New York)
   hanno pochi punti al giorno: il prezzo cambia solo quando c'è un contratto.
 - **Avvisi**: variazione rispetto all'ultimo prezzo salvato ≥ `soglia_avviso` (in su o in
-  giù). Non c'è pausa fra un avviso e l'altro: è voluto. Un salto di più del 20% (spesso
-  un prezzo letto male) si salva e si avvisa solo se il giro dopo lo conferma. La
-  didascalia comincia con nome, prezzo e variazione dall'ultimo prezzo (è la riga che si
-  vede nella notifica), poi il segnale di MyFinance, la tabella in colonne allineate per
-  il telefono (Prima, Apertura, chiusure di 1, 7, 30 e 360 giorni fa, Inizio, Max, Min,
-  Carico) e in fondo i link a Fineco, Borsa Italiana (la scheda letta dal monitor) e alla scheda
-  in MyFinance (`<myfinance_url>/?isin=<ISIN>`). Un avviso rimasto in coda più di 30
-  minuti (Telegram giù) non si manda più.
+  giù). Dopo un avviso, per 3 minuti (`monitoring.cooldown_minuti`) non ne parte un
+  altro sullo stesso titolo: un titolo in movimento continua a muoversi e con i giri
+  ogni 15 secondi arriverebbero raffiche; il prezzo si salva comunque, gli altri titoli
+  non sono bloccati e dopo un riavvio si riparte da zero. Il cooldown vale solo per
+  questi avvisi: riepilogo, proposte, risposte ai comandi (anche /grafico) e `./setup.sh
+  test` partono sempre. Un salto di più del 20% (spesso un prezzo letto male) si salva e
+  si avvisa solo se il giro dopo lo conferma. La didascalia comincia con nome, prezzo e
+  variazione dall'ultimo prezzo (è la riga che si vede nella notifica), poi il segnale
+  di MyFinance, la tabella in colonne allineate per il telefono (Prima, Apertura,
+  chiusure di 1, 7, 30 e 360 giorni fa, Inizio, Max, Min, Carico) e in fondo i link a
+  Fineco, Borsa Italiana (la scheda letta dal monitor) e alla scheda in MyFinance
+  (`<myfinance_url>/?isin=<ISIN>`). Un avviso rimasto in coda più di 30 minuti (Telegram
+  giù) non si manda più.
 - **Grafici**: solo da Supabase, quattro richieste per avviso. Immagine verticale per il
   telefono (1200×1800): in alto, a tutta larghezza, Oggi (tutti i prezzi di Borsa
   Italiana di oggi, con i punti verdi sopra l'apertura e rossi sotto); sotto, su due
@@ -160,6 +165,7 @@ python3 monitor.py --giro --ignora-orario      # un giro solo, anche fuori orari
 | `telegram.enabled`, `send_charts` | avvisi attivi; grafico o solo testo |
 | `telegram.comandi`, `riepilogo` | comandi del bot; riepilogo alla chiusura (tutti e due attivi se mancano) |
 | `monitoring.market_hours_only`, `weekdays_only` | solo in orario di borsa, solo lun-ven |
+| `monitoring.cooldown_minuti` | minuti fra due avvisi sullo stesso titolo (3 se manca) |
 | `monitoring.market_open_time`, `market_close_time` | orario (anche del timer systemd) |
 | `monitoring.price_comparison_days` | i tre periodi dei grafici in alto (1 è ignorato) |
 | `monitoring.historical_table_days` | le chiusure nella tabella |

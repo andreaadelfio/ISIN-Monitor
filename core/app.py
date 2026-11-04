@@ -115,6 +115,9 @@ class ISINMonitor:
         self._chart_generator = None
         self.ultimo_mattino: Optional[str] = None  # giorno dei lavori del mattino prima di oggi
         self._sospetti: Dict[str, float] = {}  # ISIN -> prezzo con un salto da confermare
+        # Pausa fra due avvisi sullo stesso titolo (in memoria: dopo un riavvio si riparte)
+        self.cooldown = timedelta(minutes=config['monitoring'].get('cooldown_minuti', 3))
+        self._ultimi_avvisi: Dict[str, datetime] = {}  # ISIN -> ora dell'ultimo avviso
         self.richiesta_piu_lenta = ('', 0.0)  # la richiesta a Borsa più lenta dell'ultimo giro
         # Per il comando /stato del bot
         self.avviato: Optional[datetime] = None
@@ -247,8 +250,11 @@ class ISINMonitor:
         """Confronta il prezzo con l'ultimo salvato.
 
         Restituisce la riga da salvare (solo se il prezzo è cambiato) e l'avviso da
-        mandare (se la variazione è almeno la soglia del titolo), o None.
+        mandare (se la variazione è almeno la soglia del titolo), o None. Dopo un avviso,
+        per cooldown_minuti non ne parte un altro sullo stesso titolo (il prezzo si salva
+        comunque); `soglia` data a mano (il test di ./setup.sh test) non ha cooldown.
         """
+        prova = soglia is not None
         prezzo = round(prezzo, 4)
         precedente = titolo.get('ultimo_prezzo')
         soglia = titolo['soglia'] if soglia is None else soglia
@@ -264,11 +270,19 @@ class ISINMonitor:
                 print(f"⚠️ {titolo['nome']}: {precedente:g} → {prezzo:g} ({variazione:+.1f}%), "
                       f"lo salvo solo se il prossimo giro lo conferma")
                 return None, None
-            if abs(variazione) >= soglia:
+            ultimo_avviso = self._ultimi_avvisi.get(titolo['isin'])
+            if abs(variazione) >= soglia and not prova and ultimo_avviso and \
+                    adesso - ultimo_avviso < self.cooldown:
+                # Un titolo in movimento continua a muoversi: niente raffiche di avvisi
+                print(f"⏳ {titolo['nome']} {variazione:+.2f}%: avviso saltato, l'ultimo è "
+                      f"delle {ultimo_avviso:%H:%M:%S}")
+            elif abs(variazione) >= soglia:
                 direzione = "aumento" if variazione > 0 else "calo"
                 print(f"🎯 VARIAZIONE SIGNIFICATIVA! {titolo['nome']} - {direzione}: {abs(variazione):.2f}%")
                 avviso = {'titolo': dict(titolo), 'prezzo': prezzo, 'precedente': precedente,
                           'adesso': adesso}
+                if not prova:
+                    self._ultimi_avvisi[titolo['isin']] = adesso
         if prezzo == precedente:
             return None, avviso
         titolo['ultimo_prezzo'], titolo['ultimo_ts'] = prezzo, adesso.isoformat()

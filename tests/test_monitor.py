@@ -228,7 +228,9 @@ class BorsaCrescente(BorsaFinta):
 def test_monitora_avvisi_in_un_thread_che_non_blocca_i_giri(monitor, monkeypatch, capsys):
     import threading
 
+    from datetime import timedelta
     monitor.borsa = BorsaCrescente()
+    monitor.cooldown = timedelta(0)        # qui servono due avvisi di fila sullo stesso titolo
     tutti_e_due_i_giri = threading.Event()
     thread_avvisi = []
 
@@ -616,3 +618,25 @@ def test_grafico_a_richiesta_variazione_da_ieri_in_testa():
     tabella = TableDataGenerator.generate_table_data(20.2, historical_prices={1: 20.0, 7: 19.0})
     testo = CaptionTemplates.format_caption({'isin': 'X', 'nome': 'Eni'}, 20.2, tabella)
     assert testo.startswith('<b>Eni</b> €20.2 📈 +1.00% da ieri\n')
+
+
+def test_cooldown_di_tre_minuti_per_titolo(monitor):
+    from datetime import timedelta
+    assert monitor.cooldown == timedelta(minutes=3)            # predefinito senza cooldown_minuti
+    eni, amazon = [dict(t) for t in monitor.carica_titoli()]
+    amazon['ultimo_prezzo'] = 200.0
+    alle = datetime(2026, 11, 4, 10, 0, tzinfo=modulo_app.ROMA)
+
+    assert monitor.esamina(eni, 20.2, alle)[1]                              # primo avviso
+    riga, avviso = monitor.esamina(eni, 20.4, alle + timedelta(minutes=2))
+    assert avviso is None and riga['prezzo'] == 20.4                      # saltato, ma salvato
+    assert monitor.esamina(amazon, 202.0, alle + timedelta(minutes=2))[1]   # altro titolo: sì
+    assert monitor.esamina(eni, 20.6, alle + timedelta(minutes=3))[1]       # dopo 3 minuti: sì
+    # Il test di ./setup.sh test (soglia data a mano) non conta e non è bloccato
+    assert monitor.esamina(eni, 20.6, alle + timedelta(minutes=3, seconds=15), soglia=0)[1]
+
+
+def test_cooldown_da_config(config):
+    from datetime import timedelta
+    config['monitoring']['cooldown_minuti'] = 0
+    assert ISINMonitor(config).cooldown == timedelta(0)
