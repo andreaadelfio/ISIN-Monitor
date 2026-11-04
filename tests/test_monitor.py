@@ -71,6 +71,11 @@ def monitor(config, monkeypatch):
         return True
 
     monkeypatch.setattr(istanza, '_telegram', telegram_finto)
+
+    def nessuna_chiamata_vera(metodo, **kwargs):
+        raise AssertionError(f'chiamata vera a Telegram: {metodo}')
+
+    monkeypatch.setattr(istanza, 'chiama_telegram', nessuna_chiamata_vera)
     # Orologio finto: le pause fra una richiesta e l'altra non fanno aspettare i test
     istanza.pause = []
     orologio = [1000.0]
@@ -123,7 +128,7 @@ def test_giro_una_scrittura_e_avviso_con_link(monitor):
     assert metodo == 'sendPhoto'
     assert '<a href="https://esempio.pages.dev/?isin=IT0003132476">MyFinance</a>' in dati['caption']
     # Nome, prezzo e variazione in testa: si vedono già nella notifica
-    assert dati['caption'].startswith('<b>Eni</b> €20.2 📈 +1.00% (')
+    assert dati['caption'].startswith('<b>Eni</b> €20.2 📈 +1.00%\n')
     # Il link a Borsa Italiana è la scheda letta dal monitor
     assert 'href="https://www.borsaitaliana.it/borsa/etf/scheda/IT0003132476-ETFP.html"' in dati['caption']
     # La cache ha i prezzi nuovi: il prossimo giro (anche offline) confronta con questi
@@ -139,10 +144,10 @@ def test_avviso_con_la_tua_posizione(monitor):
     metodo, dati = monitor.telegram_inviati[0]
     assert metodo == 'sendPhoto'
     # Carico 18 €: +2.2 € per quota, +22 € su 10 quote
-    assert 'Carico €18   +12.222% 📈 +2.200\n       10 quote: +22.00€' in dati['caption']
+    assert 'Carico   €18.00 +12.22% +2.20 📈\n         10 quote: +22.00€' in dati['caption']
     # Massimo e minimo dell'anno, prezzo attuale compreso (qui è il nuovo massimo)
-    assert 'Max    €20.2  +0.000% ⚪ +0.000' in dati['caption']
-    assert 'Min    €19    +6.316% 📈 +1.200' in dati['caption']
+    assert 'Max      €20.20  +0.00% +0.00 ⚪' in dati['caption']
+    assert 'Min      €19.00  +6.32% +1.20 📈' in dati['caption']
 
 
 def test_segnale_di_myfinance_solo_senza_errori():
@@ -257,6 +262,15 @@ def test_monitora_esce_fuori_orario(monitor, monkeypatch):
     monitor.borsa = BorsaFinta({})
     monitor.monitora()
     assert monitor.db.scritture == []
+    assert monitor.telegram_inviati == []          # nessun giro: niente riepilogo
+
+
+def test_riepilogo_alla_chiusura_dopo_i_giri(monitor, monkeypatch):
+    orari = iter([True, False])
+    monkeypatch.setattr(modulo_app, 'in_orario', lambda monitoring, adesso: next(orari))
+    monitor.borsa = BorsaFinta({'IT0003132476': 20.0})
+    monitor.monitora()
+    assert [dati['text'].startswith('📊 <b>Chiusura di oggi, ') for metodo, dati in monitor.telegram_inviati] == [True]
 
 
 def test_soglia_zero_avvisa_anche_a_prezzo_invariato(monitor):
@@ -429,7 +443,7 @@ def test_supabase_irraggiungibile_un_timeout_solo_per_giro(monitor):
 def test_didascalia_senza_tabella_niente_code_vuoto():
     from core.message_templates import CaptionTemplates
     testo = CaptionTemplates.format_caption({'isin': 'X', 'nome': 'A & B'}, 1.5, [])
-    assert testo.startswith('<b>A &amp; B</b> €1.5 (') and '<code>' not in testo
+    assert testo.startswith('<b>A &amp; B</b> €1.5\n') and '<code>' not in testo
 
 
 def test_borsa_che_non_risponde_giro_interrotto_dopo_due_titoli(monitor, capsys):
@@ -472,9 +486,9 @@ def test_didascalia_variazione_in_testa_solo_con_il_prezzo_precedente():
     con = TableDataGenerator.generate_table_data(19.9, previous_price=20.0)
     senza = TableDataGenerator.generate_table_data(19.9, opening_price=20.0)
     assert CaptionTemplates.format_caption({'isin': 'X', 'nome': 'Eni'}, 19.9, con).startswith(
-        '<b>Eni</b> €19.9 📉 -0.50% (')
+        '<b>Eni</b> €19.9 📉 -0.50%\n')
     assert CaptionTemplates.format_caption({'isin': 'X', 'nome': 'Eni'}, 19.9, senza).startswith(
-        '<b>Eni</b> €19.9 (')
+        '<b>Eni</b> €19.9\n')
 
 
 def test_giro_lento_dice_chi_lo_ha_rallentato(monitor, capsys):
@@ -560,3 +574,45 @@ def test_errore_nel_giro_dice_tipo_e_riga(monitor, monkeypatch, capsys):
     monkeypatch.setattr(monitor, 'giro', rotto)
     monitor.monitora(ignora_orario=True, giri=1)
     assert "ERRORE: Errore nel giro: KeyError: 'isin' (test_monitor.py:" in capsys.readouterr().out
+
+
+def test_didascalia_col_segnale_di_myfinance_e_i_link_in_fondo():
+    from core.message_templates import CaptionTemplates
+    from core.utils import TableDataGenerator
+    tabella = TableDataGenerator.generate_table_data(5.953, previous_price=5.92)
+    testo = CaptionTemplates.format_caption(
+        {'isin': 'IT0000072618', 'nome': 'Intesa', 'segnale': 'compra', 'punteggio': 72},
+        5.953, tabella, 'https://esempio/?isin=IT0000072618')
+    righe = testo.split('\n')
+    assert righe[0] == '<b>Intesa</b> €5.953 📈 +0.56%'
+    assert righe[1] == '🟢 MyFinance: Compra · 72/100'
+    assert '<code>Prima €5.920 +0.56% +0.033 📈</code>' in testo     # 3 decimali sotto i 10 €
+    assert righe[-1].startswith('<a href="https://finecobank.com') and righe[-1].endswith('MyFinance</a>')
+
+
+def test_messaggio_di_prova(monitor):
+    monitor.test_telegram()
+    metodo, dati = monitor.telegram_inviati[0]
+    assert dati['text'].split('\n') == [
+        '🧪 <b>ISIN Monitor</b>: Telegram funziona',
+        'Titoli seguiti: 2 · orario lun-ven 08:55-18:05',
+        'Comandi del bot (a monitor acceso): /prezzi /grafico /stato /aiuto',
+    ]
+
+
+def test_riepilogo_della_giornata(monitor):
+    monitor.carica_titoli()
+    monitor.manda_riepilogo()
+    metodo, dati = monitor.telegram_inviati[0]
+    assert dati['text'].startswith('📊 <b>Chiusura di oggi, ')
+    # Eni 20 € (ieri 20 €: il DbFinto dà la stessa chiusura), Amazon senza prezzo: fuori
+    assert '<code>Eni €20.00  +0.00% ⚪</code>' in dati['text']
+    assert dati['disable_web_page_preview']
+
+
+def test_grafico_a_richiesta_variazione_da_ieri_in_testa():
+    from core.message_templates import CaptionTemplates
+    from core.utils import TableDataGenerator
+    tabella = TableDataGenerator.generate_table_data(20.2, historical_prices={1: 20.0, 7: 19.0})
+    testo = CaptionTemplates.format_caption({'isin': 'X', 'nome': 'Eni'}, 20.2, tabella)
+    assert testo.startswith('<b>Eni</b> €20.2 📈 +1.00% da ieri\n')

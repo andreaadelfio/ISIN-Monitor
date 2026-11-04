@@ -316,7 +316,7 @@ class ChartGenerator:
                 if destra:
                     axis.yaxis.tick_right()
             self._plot_oggi(ax_oggi, dati_oggi(oggi, adesso), adesso, current_price, elenco[-1][2],
-                            carico, variazione_di(table_data, 'Open'))
+                            carico, variazione_di(table_data, 'Apertura'))
             self._create_summary_table(ax_tabella, table_data=table_data)
 
             # In alto il nome; sotto prezzo e ora (colorati se il prezzo è salito o sceso) e,
@@ -484,7 +484,7 @@ class ChartGenerator:
                     va='center', transform=ax.transAxes, fontsize=TESTO + 4, fontweight='bold')
             return
 
-        headers = ['', 'Price', 'Var.', 'Diff.']
+        headers = ['', 'Prezzo', 'Var.', 'Diff.']
         table = ax.table(cellText=righe, colLabels=headers, cellLoc='center',
                          bbox=(0, 0, 1, 1),
                          colWidths=self._calculate_dynamic_column_widths(righe, headers))

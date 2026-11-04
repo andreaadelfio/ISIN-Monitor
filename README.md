@@ -42,10 +42,12 @@ PC spento) e manda su Telegram i cambiamenti delle proposte di MyFinance.
 - **Avvisi**: variazione rispetto all'ultimo prezzo salvato ≥ `soglia_avviso` (in su o in
   giù). Non c'è pausa fra un avviso e l'altro: è voluto. Un salto di più del 20% (spesso
   un prezzo letto male) si salva e si avvisa solo se il giro dopo lo conferma. La
-  didascalia comincia con nome, prezzo e variazione (si vedono già nella notifica) e i
-  link a Fineco, Borsa Italiana (la scheda letta dal monitor) e alla scheda in MyFinance
-  (`<myfinance_url>/?isin=<ISIN>`); sotto, la tabella in colonne allineate per il
-  telefono. Un avviso rimasto in coda più di 30 minuti (Telegram giù) non si manda più.
+  didascalia comincia con nome, prezzo e variazione dall'ultimo prezzo (è la riga che si
+  vede nella notifica), poi il segnale di MyFinance, la tabella in colonne allineate per
+  il telefono (Prima, Apertura, chiusure di 1, 7, 30 e 360 giorni fa, Inizio, Max, Min,
+  Carico) e in fondo i link a Fineco, Borsa Italiana (la scheda letta dal monitor) e alla scheda
+  in MyFinance (`<myfinance_url>/?isin=<ISIN>`). Un avviso rimasto in coda più di 30
+  minuti (Telegram giù) non si manda più.
 - **Grafici**: solo da Supabase, quattro richieste per avviso. Immagine verticale per il
   telefono (1200×1800): in alto, a tutta larghezza, Oggi (tutti i prezzi di Borsa
   Italiana di oggi, con i punti verdi sopra l'apertura e rossi sotto); sotto, su due
@@ -70,8 +72,27 @@ PC spento) e manda su Telegram i cambiamenti delle proposte di MyFinance.
 - **Proposte**: l'analisi serale di MyFinance assegna a ogni titolo un segnale (Compra, Da
   valutare, Attendi, Evita per ora) e un punteggio. Al primo avvio del mattino, se un
   segnale o la proposta del giorno (il "Compra" con il punteggio più alto) sono cambiati,
-  arriva un solo messaggio con i cambiamenti e i link. L'ultimo stato mandato è in
+  arriva un solo messaggio con i cambiamenti (prima i Compra, col pallino del colore del
+  segnale e il punteggio) e i link. L'ultimo stato mandato è in
   `~/.local/state/isin-monitor/proposte.json` (la prima volta si salva senza messaggio).
+- **Riepilogo della giornata**: alla chiusura (18:05) un messaggio con tutti i titoli,
+  l'ultimo prezzo e la variazione da ieri, dal migliore al peggiore
+  (`telegram.riepilogo: false` per spegnerlo).
+
+## Comandi del bot Telegram
+
+Mentre il monitor è acceso (in orario di borsa) il bot risponde, solo alla chat di
+`config.json`, a questi comandi (sono anche nel menu accanto al campo di testo):
+
+| Comando | Risposta |
+| --- | --- |
+| `/prezzi` | tutti i titoli: ultimo prezzo e variazione da ieri, dal migliore al peggiore |
+| `/grafico eni` | il grafico di un titolo (nome, anche in parte, simbolo come `ENI` o `RACE.MI`, o ISIN) |
+| `/stato` | da quando gira, l'ultimo giro, giri e avvisi di oggi, Supabase |
+| `/aiuto` | l'elenco dei comandi |
+
+I comandi mandati a monitor spento (sera, weekend) non vengono eseguiti dopo. Per
+spegnerli: `telegram.comandi: false`.
 
 ## Dati in Supabase
 
@@ -114,7 +135,7 @@ scrive "Borsa Italiana chiusa oggi" e resta acceso senza fare niente fino alla c
 così il timer non lo rilancia ogni 15 secondi. Le altre feste italiane (6 gennaio,
 25 aprile, 2 giugno, Ferragosto, 1° novembre, 8 dicembre) sono giorni di borsa aperta.
 
-## Comandi
+## Comandi da terminale
 
 ```bash
 ./setup.sh status                     # stato del timer e prossimi avvii
@@ -137,6 +158,7 @@ python3 monitor.py --giro --ignora-orario      # un giro solo, anche fuori orari
 | `myfinance_url` | indirizzo del sito, per i link `?isin=<ISIN>` |
 | `telegram.bot_token`, `chat_id` | bot e chat degli avvisi |
 | `telegram.enabled`, `send_charts` | avvisi attivi; grafico o solo testo |
+| `telegram.comandi`, `riepilogo` | comandi del bot; riepilogo alla chiusura (tutti e due attivi se mancano) |
 | `monitoring.market_hours_only`, `weekdays_only` | solo in orario di borsa, solo lun-ven |
 | `monitoring.market_open_time`, `market_close_time` | orario (anche del timer systemd) |
 | `monitoring.price_comparison_days` | i tre periodi dei grafici in alto (1 è ignorato) |
@@ -210,6 +232,7 @@ core/price_providers.py  Borsa Italiana e Yahoo
 core/storico.py       riempimento dei buchi con Yahoo
 core/chart_generator.py  grafici
 core/proposte.py      cambiamenti delle proposte di MyFinance
+core/comandi.py       comandi del bot Telegram (/prezzi, /grafico, /stato, /aiuto)
 core/posizioni.py     prezzo di carico, acquisti e vendite dal registro investimenti
 core/orario.py        orario di mercato e OnCalendar del timer
 core/stato.py         file di stato in ~/.local/state/isin-monitor

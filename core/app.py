@@ -116,6 +116,10 @@ class ISINMonitor:
         self.ultimo_mattino: Optional[str] = None  # giorno dei lavori del mattino prima di oggi
         self._sospetti: Dict[str, float] = {}  # ISIN -> prezzo con un salto da confermare
         self.richiesta_piu_lenta = ('', 0.0)  # la richiesta a Borsa più lenta dell'ultimo giro
+        # Per il comando /stato del bot
+        self.avviato: Optional[datetime] = None
+        self.giri_fatti = self.avvisi_di_oggi = 0
+        self.ultimo_giro: Optional[tuple] = None  # (ora, prezzi letti, titoli)
 
     @property
     def chart_generator(self):
@@ -304,6 +308,7 @@ class ISINMonitor:
         cambiati = ', '.join(f"{t.get('simbolo_borsa') or t['nome']} {t['ultimo_prezzo']:g}"
                              for t in titoli if t['isin'] in {riga['isin'] for riga in nuovi})
         durata = time.monotonic() - inizio
+        self.ultimo_giro = (adesso, letti, len(titoli))
         # Un giro oltre i 15 secondi salta il successivo: si dice chi l'ha rallentato
         lento = ''
         if durata > INTERVALLO:
@@ -339,17 +344,22 @@ class ISINMonitor:
     def monitora(self, ignora_orario: bool = False, giri: Optional[int] = None) -> None:
         """Un giro ogni 15 secondi finché si è in orario di mercato (poi esce).
 
-        Avvisi e lavori del mattino girano in thread a parte: un grafico lento o Yahoo
-        non fanno saltare i giri dei prezzi. `giri` limita i giri (per i test).
+        Avvisi, lavori del mattino e comandi del bot girano in thread a parte: un grafico
+        lento o Yahoo non fanno saltare i giri dei prezzi. `giri` limita i giri (per i test).
         """
         coda: queue.Queue = queue.Queue()
         threading.Thread(target=self._spedisci_avvisi, args=(coda,), daemon=True).start()
+        if self.telegram_configured and self.config['telegram'].get('comandi', True):
+            from . import comandi
+            threading.Thread(target=comandi.ascolta, args=(self, coda), daemon=True).start()
         mattino = None
+        self.avviato = datetime.now(ROMA)
         fatti = errori = mandati = 0
         while ignora_orario or in_orario(self.config['monitoring'], datetime.now()):
             try:
                 titoli, avvisi = self.giro()
                 mandati += len(avvisi)
+                self.avvisi_di_oggi = mandati
                 for avviso in avvisi:
                     coda.put(avviso)
                 if self.mattino_da_fare():
@@ -360,6 +370,7 @@ class ISINMonitor:
                 print(f"ERRORE: Errore nel giro: {descrivi(errore)}")
                 errori += 1
             fatti += 1
+            self.giri_fatti = fatti
             if self.borsa.troppe_richieste:
                 print(f"⏸️ Pausa di {PAUSA_429} s per non farsi bloccare da Borsa Italiana")
                 time.sleep(PAUSA_429)
@@ -370,8 +381,21 @@ class ISINMonitor:
         print(f"⏹️ Fine dei giri: {fatti} giri ({errori} con errori), {mandati} avvisi; "
               f"finisco quelli in coda ed esco")
         coda.join()
+        # Il riepilogo solo alla vera chiusura, dopo una giornata di giri (non nelle prove)
+        if (fatti and not ignora_orario and giri is None and self.telegram_configured
+                and self.config['telegram'].get('riepilogo', True)):
+            self.manda_riepilogo()
         if mattino:
             mattino.join()
+
+    def manda_riepilogo(self) -> None:
+        """Alla chiusura, un messaggio con tutti i titoli e la variazione del giorno."""
+        from .comandi import testo_prezzi
+        adesso = datetime.now(ROMA)
+        testo = testo_prezzi(self.db, stato.leggi('titoli.json', []), adesso,
+                             f"Chiusura di oggi, {adesso:%d/%m}")
+        if self.send_telegram_message(testo, anteprima=False):
+            print("📨 Riepilogo della giornata inviato")
 
     def _spedisci_avvisi(self, coda: queue.Queue) -> None:
         """Thread degli avvisi: uno alla volta, nell'ordine in cui arrivano.
@@ -600,7 +624,10 @@ class ISINMonitor:
         if not self.telegram_configured:
             print("❌ Telegram non configurato!")
             return
-        if self.send_telegram_message(CaptionTemplates.format_test_caption()):
+        from .orario import descrizione_orario
+        testo = CaptionTemplates.format_test_caption(
+            len(self.carica_titoli()), descrizione_orario(self.config['monitoring']))
+        if self.send_telegram_message(testo):
             print("✅ Messaggio di test inviato con successo!")
         else:
             print("❌ Errore nell'invio del messaggio di test")
@@ -629,24 +656,35 @@ class ISINMonitor:
         }, files={'photo': (filename, photo_data, 'image/png')})
 
     def _telegram(self, metodo: str, **kwargs) -> bool:
+        """Manda qualcosa su Telegram: True se è andato."""
+        return self.chiama_telegram(metodo, **kwargs) is not None
+
+    def chiama_telegram(self, metodo: str, timeout: Optional[float] = None,
+                        silenzioso: bool = False, **kwargs):
+        """Il risultato di un metodo dell'API di Telegram, o None se non è andato.
+
+        `silenzioso` non scrive gli errori nel log (per la lettura dei comandi, che riprova
+        da sola e scrive lei una riga quando smette di funzionare).
+        """
         if not self.config['telegram'].get('chat_id'):
             print("ERRORE: Chat ID Telegram non configurato!")
-            return False
+            return None
         # Timeout più alto per l'upload delle foto
-        timeout = max(self.config.get('api', {}).get('request_timeout', 10), 30)
+        timeout = timeout or max(self.config.get('api', {}).get('request_timeout', 10), 30)
         for tentativo in range(2):
             try:
-                # Senza sessione condivisa: lo chiamano sia il thread degli avvisi sia quello del mattino
+                # Senza sessione condivisa: lo chiamano i thread degli avvisi, del mattino e dei comandi
                 risposta = requests.post(
                     f"https://api.telegram.org/bot{self.bot_token}/{metodo}", timeout=timeout, **kwargs
                 )
                 dati = risposta.json()
             except (requests.RequestException, ValueError) as errore:
                 # Il messaggio di requests contiene l'URL con il token: non si stampa
-                print(f"ERRORE: Telegram non raggiungibile ({errore.__class__.__name__})")
-                return False
+                if not silenzioso:
+                    print(f"ERRORE: Telegram non raggiungibile ({errore.__class__.__name__})")
+                return None
             if dati.get('ok', False):
-                return True
+                return dati.get('result', True)
             # Troppi messaggi insieme (es. tanti avvisi all'apertura): Telegram dice quanto aspettare
             attesa = (dati.get('parameters') or {}).get('retry_after')
             if attesa and tentativo == 0 and attesa <= MAX_ATTESA_TELEGRAM:
@@ -654,5 +692,6 @@ class ISINMonitor:
                 time.sleep(attesa)
                 continue
             break
-        print(f"ERRORE: Errore nell'invio Telegram: {dati.get('description', 'sconosciuto')}")
-        return False
+        if not silenzioso:
+            print(f"ERRORE: Errore nell'invio Telegram: {dati.get('description', 'sconosciuto')}")
+        return None

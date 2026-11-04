@@ -142,7 +142,7 @@ def test_prima_cifra_decimale_significativa():
 
 
 def test_tabella_arrotondata():
-    righe = [{'label': 'Open', 'price': 5.941, 'variation': 0.808, 'difference': 0.048},
+    righe = [{'label': 'Apertura', 'price': 5.941, 'variation': 0.808, 'difference': 0.048},
              {'label': '30gg', 'price': 6.753, 'variation': -11.313, 'difference': -0.764},
              {'label': 'Carico', 'price': 16.0769, 'variation': 61.225, 'difference': 9.843}]
     fig, asse = plt.subplots()
@@ -150,7 +150,7 @@ def test_tabella_arrotondata():
     celle = asse.tables[0].get_celld()
     testi = [[celle[riga, col].get_text().get_text() for col in range(4)] for riga in (1, 2, 3)]
     plt.close(fig)
-    assert testi == [['Open', '€5.94', '+0.8%', '+0.05'],
+    assert testi == [['Apertura', '€5.94', '+0.8%', '+0.05'],
                      ['30gg', '€6.75', '-11.3%', '-0.8'],
                      ['Carico', '€16.08', '+61.2%', '+9.8']]
 

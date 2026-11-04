@@ -5,7 +5,9 @@
     "bot_token": "123456789:ABCdefGHIjklMNOpqrsTUVwxyz-1234567890",
     "chat_id": "IL_TUO_CHAT_ID",
     "enabled": true,
-    "send_charts": true
+    "send_charts": true,
+    "comandi": true,
+    "riepilogo": true
   },
   "monitoring": {
     "market_hours_only": true,

@@ -12,6 +12,8 @@ cambiato manda un solo messaggio con i cambiamenti e i link alle schede.
 from html import escape
 from typing import Dict, List, Optional
 
+# Un pallino colorato per ogni segnale, come i colori del sito
+PALLINI = {'compra': '🟢', 'valuta': '🟡', 'attendi': '⚪', 'evita': '🔴'}
 ETICHETTE = {
     'compra': 'Compra',
     'valuta': 'Da valutare',
@@ -58,20 +60,27 @@ def messaggio(prima: Dict, adesso: Dict, cambi: Dict, base_url: str) -> Optional
         testo = adesso['nomi'].get(isin) or prima.get('nomi', {}).get(isin) or isin
         return f'<a href="{link_myfinance(base_url, isin)}">{escape(testo)}</a>'
 
+    def voto(isin: str) -> str:
+        punteggio = adesso['punteggi'].get(isin)
+        return f" · {punteggio}/100" if punteggio is not None else ''
+
     righe = ['📋 <b>Proposte di MyFinance aggiornate</b>']
     if cambi['proposta']:
         isin = adesso['proposta']
         if isin:
-            punteggio = adesso['punteggi'].get(isin)
-            dettaglio = f" (punteggio {punteggio})" if punteggio is not None else ''
-            righe.append(f"⭐ Proposta del giorno: {nome(isin)}{dettaglio}")
+            righe.append(f"⭐ Proposta del giorno: {nome(isin)}{voto(isin)}")
         else:
             righe.append("⭐ Nessuna proposta oggi: nessun titolo da comprare")
         if prima.get('proposta'):
             righe.append(f"    prima era {nome(prima['proposta'])}")
     if cambi['segnali']:
         righe.append('')
-        for isin, precedente, segnale in sorted(cambi['segnali'], key=lambda c: adesso['nomi'][c[0]]):
+        # Prima i Compra, poi Da valutare, Attendi, Evita; a parità, per nome
+        ordine = list(ETICHETTE)
+        for isin, precedente, segnale in sorted(
+                cambi['segnali'],
+                key=lambda c: (ordine.index(c[2]) if c[2] in ordine else len(ordine), adesso['nomi'][c[0]])):
             da = ETICHETTE.get(precedente, precedente) if precedente else 'nuovo'
-            righe.append(f"• {nome(isin)}: {da} → <b>{ETICHETTE.get(segnale, segnale)}</b>")
+            righe.append(f"{PALLINI.get(segnale, '•')} {nome(isin)}: {da} → "
+                         f"<b>{ETICHETTE.get(segnale, segnale)}</b>{voto(isin)}")
     return '\n'.join(righe)

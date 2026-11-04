@@ -23,7 +23,9 @@ def config():
     return {
         'test': False,
         'myfinance_url': 'https://esempio.pages.dev',
-        'telegram': {'bot_token': 'finto', 'chat_id': '1', 'enabled': True, 'send_charts': True},
+        # Niente thread dei comandi nei test di monitora (li provano i test di core/comandi.py)
+        'telegram': {'bot_token': 'finto', 'chat_id': '1', 'enabled': True, 'send_charts': True,
+                     'comandi': False},
         'monitoring': {'market_hours_only': True, 'weekdays_only': True,
                        'market_open_time': '08:55', 'market_close_time': '18:05',
                        'price_comparison_days': [1, 7, 30, 360],

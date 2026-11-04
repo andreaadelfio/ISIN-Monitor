@@ -63,7 +63,7 @@ class TableDataGenerator:
             price_change = ((current_price - previous_price) / previous_price) * 100
             price_diff = current_price - previous_price
             table_rows.append({
-                'label': 'Prev',
+                'label': 'Prima',
                 'price': previous_price,
                 'variation': price_change,
                 'difference': price_diff,
@@ -75,7 +75,7 @@ class TableDataGenerator:
             price_diff = current_price - opening_price
             price_change = (price_diff / opening_price) * 100
             table_rows.append({
-                'label': 'Open',
+                'label': 'Apertura',
                 'price': opening_price,
                 'variation': price_change,
                 'difference': price_diff,
@@ -101,7 +101,7 @@ class TableDataGenerator:
             price_diff = current_price - oldest_price
             variation = (price_diff / oldest_price) * 100
             table_rows.append({
-                'label': 'Oldest',
+                'label': 'Inizio',
                 'price': oldest_price,
                 'variation': variation,
                 'difference': price_diff,

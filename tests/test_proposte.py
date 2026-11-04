@@ -36,10 +36,13 @@ def test_segnali_e_proposta_cambiati():
                                         ('N', None, 'evita')]
     assert cambi['proposta']
     testo = proposte.messaggio(prima, adesso, cambi, URL)
-    assert 'Proposta del giorno: <a href="https://esempio.pages.dev/?isin=C">Gamma</a> (punteggio 75)' in testo
+    assert 'Proposta del giorno: <a href="https://esempio.pages.dev/?isin=C">Gamma</a> · 75/100' in testo
     assert 'prima era <a href="https://esempio.pages.dev/?isin=A">Alfa</a>' in testo
-    assert 'Alfa</a>: Compra → <b>Da valutare</b>' in testo
-    assert 'Nuovo &amp; C</a>: nuovo → <b>Evita per ora</b>' in testo
+    assert '🟡 <a href="https://esempio.pages.dev/?isin=A">Alfa</a>: Compra → <b>Da valutare</b> · 40/100' in testo
+    assert 'Nuovo &amp; C</a>: nuovo → <b>Evita per ora</b> · 10/100' in testo
+    # Prima i Compra, poi Da valutare, poi Evita
+    segnali = [r for r in testo.split('\n') if r[:1] in '🟢🟡⚪🔴' and r]
+    assert [r.split('>')[1].split('<')[0] for r in segnali] == ['Gamma', 'Alfa', 'Nuovo &amp; C']
 
 
 def test_nessun_compra():
