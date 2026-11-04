@@ -144,10 +144,10 @@ def test_avviso_con_la_tua_posizione(monitor):
     metodo, dati = monitor.telegram_inviati[0]
     assert metodo == 'sendPhoto'
     # Carico 18 €: +2.2 € per quota, +22 € su 10 quote
-    assert 'Carico   €18.00 +12.22% +2.20 📈\n         10 quote: +22.00€' in dati['caption']
+    assert 'Carico   €18.00 +12.22%\n  10 quote: +22.00€' in dati['caption']
     # Massimo e minimo dell'anno, prezzo attuale compreso (qui è il nuovo massimo)
-    assert 'Max      €20.20  +0.00% +0.00 ⚪' in dati['caption']
-    assert 'Min      €19.00  +6.32% +1.20 📈' in dati['caption']
+    assert 'Max      €20.20  +0.00%' in dati['caption']
+    assert 'Min      €19.00  +6.32%' in dati['caption']
 
 
 def test_segnale_di_myfinance_solo_senza_errori():
@@ -588,7 +588,7 @@ def test_didascalia_col_segnale_di_myfinance_e_i_link_in_fondo():
     righe = testo.split('\n')
     assert righe[0] == '<b>Intesa</b> €5.953 📈 +0.56%'
     assert righe[1] == '🟢 MyFinance: Compra · 72/100'
-    assert '<code>Prima €5.920 +0.56% +0.033 📈</code>' in testo     # 3 decimali sotto i 10 €
+    assert '<code>Prima €5.920 +0.56%</code>' in testo     # 3 decimali sotto i 10 €
     assert righe[-1].startswith('<a href="https://finecobank.com') and righe[-1].endswith('MyFinance</a>')
 
 
@@ -676,3 +676,49 @@ def test_stato_del_bot_con_webhook(monitor, monkeypatch, capsys):
     assert 'deleteWebhook' not in chiamate                   # di suo non toglie niente
     monitor.stato_telegram(togli_webhook=True)
     assert chiamate[-2:] == ['deleteWebhook', 'getWebhookInfo']
+
+
+def test_foto_riprovata_se_la_connessione_non_parte(config, monkeypatch, capsys):
+    istanza = ISINMonitor(config)
+    tentativi, pause = [], []
+
+    class Risposta:
+        def json(self):
+            return {'ok': True, 'result': {'message_id': 1}}
+
+    def post(*args, **kwargs):
+        tentativi.append(kwargs.get('files'))
+        if len(tentativi) < 3:
+            raise modulo_app.requests.ConnectionError('rete giù')
+        return Risposta()
+
+    monkeypatch.setattr(modulo_app.requests, 'post', post)
+    monkeypatch.setattr(modulo_app.time, 'sleep', pause.append)
+    assert istanza.send_telegram_photo(b'png', 'didascalia')
+    assert len(tentativi) == 3 and pause == [3, 10] and tentativi[2]['photo'][1] == b'png'
+    assert capsys.readouterr().out.count('riprovo fra') == 2
+
+
+def test_read_timeout_non_si_riprova(config, monkeypatch):
+    istanza = ISINMonitor(config)
+    tentativi = []
+
+    def post(*args, **kwargs):
+        tentativi.append(1)
+        raise modulo_app.requests.ReadTimeout('lento')
+
+    monkeypatch.setattr(modulo_app.requests, 'post', post)
+    monkeypatch.setattr(modulo_app.time, 'sleep', lambda s: None)
+    assert not istanza.send_telegram_photo(b'png', 'didascalia')
+    assert tentativi == [1]          # la foto potrebbe essere già arrivata: niente doppioni
+
+
+def test_righe_della_tabella_corte_anche_sotto_la_foto(monitor):
+    # Sotto un grafico verticale il fumetto è stretto: nessuna riga oltre i 26 caratteri
+    monitor.db.registro['IT0003132476'] = [
+        {'posizione': 3, 'data': '2026-01-10', 'operazione': 'Investimento', 'importo': '-1800',
+         'quantita': '100', 'abp': None}]
+    monitor.borsa = BorsaFinta({'IT0003132476': 20.2})
+    monitor.controlla_tutti()
+    tabella = monitor.telegram_inviati[0][1]['caption'].split('<code>')[1].split('</code>')[0]
+    assert max(len(riga) for riga in tabella.split('\n')) <= 26

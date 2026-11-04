@@ -2,7 +2,8 @@
 """
 Comandi del bot Telegram, mentre il monitor è acceso (in orario di borsa).
 
-Il bot risponde solo alla chat di config.json (chat_id):
+Il bot risponde solo alla chat di config.json (chat_id), anche se è un canale (lì i
+comandi si scrivono come messaggi, senza menu; il bot dev'essere amministratore):
   /prezzi          tutti i titoli, con la variazione dalla chiusura precedente
   /grafico eni     il grafico di un titolo (nome, simbolo o ISIN)
   /stato           come sta il monitor
@@ -163,7 +164,8 @@ def gestisci(monitor, coda, aggiornamenti: List[Dict], avvio: float) -> Optional
     chat = str(monitor.config['telegram'].get('chat_id'))
     for aggiornamento in aggiornamenti:
         offset = aggiornamento['update_id'] + 1
-        messaggio = aggiornamento.get('message') or {}
+        # In un canale i messaggi arrivano come channel_post, in un gruppo o in privato come message
+        messaggio = aggiornamento.get('message') or aggiornamento.get('channel_post') or {}
         if str(messaggio.get('chat', {}).get('id')) != chat:
             continue   # solo la chat di Andrea
         if messaggio.get('date', 0) < avvio - MAX_ETA_COMANDO:
@@ -189,7 +191,8 @@ def consiglio(errore: str) -> str:
 def ascolta(monitor, coda) -> None:
     """Thread dei comandi: legge i messaggi del bot finché il monitor è acceso."""
     avvio = time.time()
-    # Il menu dei comandi nell'app di Telegram (il pulsante accanto al campo di testo)
+    # Il menu dei comandi nell'app di Telegram (in privato e nei gruppi; nei canali Telegram
+    # non lo mostra e i comandi si scrivono a mano)
     monitor.chiama_telegram('setMyCommands', silenzioso=True, data={'commands': json.dumps(
         [{'command': comando, 'description': descrizione} for comando, descrizione in COMANDI])})
     offset = None
@@ -197,7 +200,8 @@ def ascolta(monitor, coda) -> None:
     while True:
         aggiornamenti = monitor.chiama_telegram(
             'getUpdates', timeout=40, silenzioso=True,
-            data={'timeout': 30, 'offset': offset, 'allowed_updates': json.dumps(['message'])})
+            data={'timeout': 30, 'offset': offset,
+                  'allowed_updates': json.dumps(['message', 'channel_post'])})
         if aggiornamenti is None:
             if monitor.errore_telegram != errore:
                 errore = monitor.errore_telegram

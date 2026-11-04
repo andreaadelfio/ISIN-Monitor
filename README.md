@@ -51,8 +51,10 @@ PC spento) e manda su Telegram i cambiamenti delle proposte di MyFinance.
   di MyFinance, la tabella in colonne allineate per il telefono (Prima, Apertura,
   chiusure di 1, 7, 30 e 360 giorni fa, Inizio, Max, Min, Carico) e in fondo i link a
   Fineco, Borsa Italiana (la scheda letta dal monitor) e alla scheda in MyFinance
-  (`<myfinance_url>/?isin=<ISIN>`). Un avviso rimasto in coda più di 30 minuti (Telegram
-  giù) non si manda più.
+  (`<myfinance_url>/?isin=<ISIN>`). La tabella ha righe corte (circa 23 caratteri) perché
+  sotto il grafico il fumetto è stretto. Se la connessione con Telegram non parte, l'invio
+  si riprova dopo 3 e 10 secondi prima di ripiegare sul solo testo. Un avviso rimasto in
+  coda più di 30 minuti (Telegram giù) non si manda più.
 - **Grafici**: solo da Supabase, quattro richieste per avviso. Immagine verticale per il
   telefono (1200×1800): in alto, a tutta larghezza, Oggi (tutti i prezzi di Borsa
   Italiana di oggi, con i punti verdi sopra l'apertura e rossi sotto); sotto, su due
@@ -87,7 +89,9 @@ PC spento) e manda su Telegram i cambiamenti delle proposte di MyFinance.
 ## Comandi del bot Telegram
 
 Mentre il monitor è acceso (in orario di borsa) il bot risponde, solo alla chat di
-`config.json`, a questi comandi (sono anche nel menu accanto al campo di testo):
+`config.json`, a questi comandi (in privato e nei gruppi sono anche nel menu accanto al
+campo di testo; se la chat è un canale si scrivono a mano nel canale, il bot dev'essere
+amministratore, e la risposta arriva nel canale):
 
 | Comando | Risposta |
 | --- | --- |

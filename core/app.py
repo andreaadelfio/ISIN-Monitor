@@ -47,6 +47,8 @@ SALTO_SOSPETTO = 20
 LOG_OFFLINE = 300
 # Un avviso più vecchio di così (rimasto in coda con Telegram giù) non si manda più
 MAX_RITARDO_AVVISO = timedelta(minutes=30)
+# Attese prima di riprovare una richiesta a Telegram che non è partita (rete giù a tratti)
+ATTESE_RETE_TELEGRAM = [3, 10]
 # Attesa massima chiesta da Telegram (retry_after) per riprovare un invio
 MAX_ATTESA_TELEGRAM = 120
 # Pausa dopo una risposta 429 (troppe richieste) di Borsa Italiana
@@ -702,6 +704,23 @@ class ISINMonitor:
         """Manda qualcosa su Telegram: True se è andato."""
         return self.chiama_telegram(metodo, **kwargs) is not None
 
+    def _post_telegram(self, metodo: str, timeout: float, riprova: bool, **kwargs):
+        """La richiesta a Telegram; se la connessione non parte (rete del PC lenta a tratti)
+        si riprova dopo qualche secondo. Un ReadTimeout no: il messaggio potrebbe essere già
+        arrivato e partirebbe due volte."""
+        attese = ATTESE_RETE_TELEGRAM if riprova else []
+        for attesa in [*attese, None]:
+            try:
+                # Senza sessione condivisa: lo chiamano i thread degli avvisi, del mattino e dei comandi
+                return requests.post(f"https://api.telegram.org/bot{self.bot_token}/{metodo}",
+                                     timeout=timeout, **kwargs)
+            except requests.ConnectionError as errore:
+                if attesa is None:
+                    raise
+                print(f"⏳ Telegram non raggiungibile ({errore.__class__.__name__}), "
+                      f"riprovo fra {attesa} s")
+                time.sleep(attesa)
+
     def chiama_telegram(self, metodo: str, timeout: Optional[float] = None,
                         silenzioso: bool = False, **kwargs):
         """Il risultato di un metodo dell'API di Telegram, o None se non è andato.
@@ -716,10 +735,7 @@ class ISINMonitor:
         timeout = timeout or max(self.config.get('api', {}).get('request_timeout', 10), 30)
         for tentativo in range(2):
             try:
-                # Senza sessione condivisa: lo chiamano i thread degli avvisi, del mattino e dei comandi
-                risposta = requests.post(
-                    f"https://api.telegram.org/bot{self.bot_token}/{metodo}", timeout=timeout, **kwargs
-                )
+                risposta = self._post_telegram(metodo, timeout, riprova=not silenzioso, **kwargs)
                 dati = risposta.json()
             except (requests.RequestException, ValueError) as errore:
                 # Il messaggio di requests contiene l'URL con il token: non si stampa

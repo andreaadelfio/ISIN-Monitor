@@ -133,6 +133,8 @@ def test_ascolta_menu_offset_e_webhook_attivo(monkeypatch, capsys):
 
     def chiama(metodo, **kwargs):
         chiamate.append((metodo, kwargs['data'].get('offset')))
+        if metodo == 'getUpdates':   # anche i messaggi del canale
+            assert kwargs['data']['allowed_updates'] == '["message", "channel_post"]'
         if metodo == 'setMyCommands':
             return True
         if not risposte:
@@ -161,3 +163,13 @@ def test_altro_programma_che_legge_lo_stesso_bot():
                                   'only one bot instance is running (409)')
     assert 'un altro programma legge i messaggi con lo stesso bot' in consiglio
     assert comandi.consiglio('non raggiungibile (ConnectionError)') == ''
+
+
+def test_comandi_scritti_nel_canale():
+    monitor, adesso = MonitorFinto(), time.time()
+    post = {'update_id': 20, 'channel_post': {'chat': {'id': 42, 'type': 'channel'},
+                                              'date': int(adesso), 'text': '/stato'}}
+    altro = {'update_id': 21, 'channel_post': {'chat': {'id': -100, 'type': 'channel'},
+                                               'date': int(adesso), 'text': '/stato'}}
+    assert comandi.gestisci(monitor, queue.Queue(), [post, altro], adesso) == 22
+    assert len(monitor.messaggi) == 1 and 'acceso' in monitor.messaggi[0]   # risponde nel canale

@@ -81,22 +81,21 @@ class CaptionTemplates:
         if segnale:
             righe_messaggio.append(segnale)
 
-        # Tabella a colonne allineate (circa 35 caratteri, una riga sul telefono). L'emoji va
-        # in fondo: nel testo a larghezza fissa di Telegram non è larga come le lettere
+        # Tabella a colonne allineate, corta (circa 23 caratteri): sotto la foto il fumetto
+        # è largo quanto l'immagine verticale e le righe più lunghe andavano a capo. La
+        # differenza in euro e i colori sono nella tabella del grafico
         cifre = decimali(current_price)
         prezzi = [f"€{row['price']:.{cifre}f}" for row in table_data]
         variazioni = [f"{row['variation']:+.2f}%" for row in table_data]
-        differenze = [f"{row['difference']:+.{cifre}f}" for row in table_data]
         larghezze = [max((len(testo) for testo in colonna), default=0)
-                     for colonna in ([row['label'] for row in table_data], prezzi, variazioni, differenze)]
+                     for colonna in ([row['label'] for row in table_data], prezzi, variazioni)]
         tabella = []
-        for row, prezzo, variaz, differenza in zip(table_data, prezzi, variazioni, differenze):
-            emoji = CaptionTemplates._get_percentage_emoji(row['variation'], is_positive_good=True)
-            tabella.append(f"{row['label']:<{larghezze[0]}} {prezzo:<{larghezze[1]}} "
-                           f"{variaz:>{larghezze[2]}} {differenza:>{larghezze[3]}} {emoji}")
+        for row, prezzo, variaz in zip(table_data, prezzi, variazioni):
+            tabella.append(f"{row['label']:<{larghezze[0]}} {prezzo:>{larghezze[1]}} "
+                           f"{variaz:>{larghezze[2]}}")
             if row.get('quote'):   # la tua posizione: guadagno o perdita su tutte le quote
                 quote = NumberFormatter.format_number(row['quote'])
-                tabella.append(f"{'':<{larghezze[0]}} {quote} quote: {row['difference'] * row['quote']:+.2f}€")
+                tabella.append(f"  {quote} quote: {row['difference'] * row['quote']:+.2f}€")
         if tabella:   # un <code></code> vuoto Telegram lo rifiuta
             righe_messaggio.append("\n<code>" + "\n".join(tabella) + "</code>")
         righe_messaggio.append(' · '.join(links))
