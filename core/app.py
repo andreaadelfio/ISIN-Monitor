@@ -506,7 +506,8 @@ class ISINMonitor:
     @profile()
     def invia_avviso(self, titolo: Dict, prezzo: float, precedente: Optional[float],
                      adesso: datetime) -> None:
-        """Avviso su Telegram: grafico con didascalia, o solo testo se il grafico non riesce."""
+        """Avviso su Telegram: il grafico con nome e link, o, se il grafico non si crea o la
+        foto non parte, il messaggio di testo con prezzo, variazioni e tabella."""
         if not self.telegram_configured:
             return
         link = proposte.link_myfinance(self.myfinance_url, titolo['isin'])
@@ -518,12 +519,12 @@ class ISINMonitor:
             print(f"❌ Errore generazione grafico per {titolo['isin']}: {descrivi(errore)}")
         if tabella is None:
             tabella = TableDataGenerator.generate_table_data(prezzo, previous_price=precedente)
-        caption = CaptionTemplates.format_caption(titolo, prezzo, tabella, link,
-                                                  self.borsa.scheda(titolo['isin']))
-
-        if png and self.send_telegram_photo(png, caption, f"isin_chart_{titolo['isin']}.png"):
+        scheda = self.borsa.scheda(titolo['isin'])
+        if png and self.send_telegram_photo(png, CaptionTemplates.didascalia_foto(titolo, link, scheda),
+                                            f"isin_chart_{titolo['isin']}.png"):
             print(f"📨 Grafico inviato per {titolo['nome']}")
-        elif self.send_telegram_message(caption):
+        elif self.send_telegram_message(CaptionTemplates.format_caption(titolo, prezzo, tabella,
+                                                                        link, scheda)):
             print(f"📨 Messaggio inviato per {titolo['nome']}")
         else:
             print(f"❌ Fallito invio notifica per {titolo['nome']}")

@@ -126,11 +126,13 @@ def test_giro_una_scrittura_e_avviso_con_link(monitor):
     assert len(monitor.telegram_inviati) == 1
     metodo, dati = monitor.telegram_inviati[0]
     assert metodo == 'sendPhoto'
-    assert '<a href="https://esempio.pages.dev/?isin=IT0003132476">MyFinance</a>' in dati['caption']
-    # Nome, prezzo e variazione in testa: si vedono già nella notifica
-    assert dati['caption'].startswith('<b>Eni</b> €20.2 📈 +1.00%\n')
-    # Il link a Borsa Italiana è la scheda letta dal monitor
-    assert 'href="https://www.borsaitaliana.it/borsa/etf/scheda/IT0003132476-ETFP.html"' in dati['caption']
+    # Sotto il grafico solo il nome e i link (il resto è nell'immagine); il link a Borsa
+    # Italiana è la scheda letta dal monitor
+    assert dati['caption'] == (
+        'Eni\n'
+        '<a href="https://finecobank.com/pvt/trading/snapshot/IT0003132476.AFF">Fineco</a> · '
+        '<a href="https://www.borsaitaliana.it/borsa/etf/scheda/IT0003132476-ETFP.html">Borsa IT</a> · '
+        '<a href="https://esempio.pages.dev/?isin=IT0003132476">MyFinance</a>')
     # La cache ha i prezzi nuovi: il prossimo giro (anche offline) confronta con questi
     assert stato.leggi('titoli.json')[0]['ultimo_prezzo'] == 20.2
 
@@ -140,14 +142,33 @@ def test_avviso_con_la_tua_posizione(monitor):
         {'posizione': 3, 'data': '2026-01-10', 'operazione': 'Investimento', 'importo': '-180',
          'quantita': '10', 'abp': None}]
     monitor.borsa = BorsaFinta({'IT0003132476': 20.2})
+    monitor.config['telegram']['send_charts'] = False     # il messaggio di testo, con la tabella
     monitor.controlla_tutti()
     metodo, dati = monitor.telegram_inviati[0]
-    assert metodo == 'sendPhoto'
+    assert metodo == 'sendMessage'
+    # Nome, prezzo e variazione in testa: si vedono già nella notifica
+    assert dati['text'].startswith('<b>Eni</b> €20.2 📈 +1.00%\n')
     # Carico 18 €: +2.2 € per quota, +22 € su 10 quote
-    assert 'Carico   €18.00 +12.22%\n  10 quote: +22.00€' in dati['caption']
+    assert 'Carico   €18.00 +12.22%\n  10 quote: +22.00€' in dati['text']
     # Massimo e minimo dell'anno, prezzo attuale compreso (qui è il nuovo massimo)
-    assert 'Max      €20.20  +0.00%' in dati['caption']
-    assert 'Min      €19.00  +6.32%' in dati['caption']
+    assert 'Max      €20.20  +0.00%' in dati['text']
+    assert 'Min      €19.00  +6.32%' in dati['text']
+
+
+def test_foto_che_non_parte_messaggio_con_tutto(monitor):
+    inviati = monitor.telegram_inviati
+
+    def telegram(metodo, **kwargs):
+        if metodo == 'sendPhoto':
+            return False                                  # anche dopo i nuovi tentativi
+        inviati.append((metodo, kwargs['data']))
+        return True
+
+    monitor._telegram = telegram
+    monitor.borsa = BorsaFinta({'IT0003132476': 20.2})
+    monitor.controlla_tutti()
+    assert [metodo for metodo, dati in inviati] == ['sendMessage']
+    assert inviati[0][1]['text'].startswith('<b>Eni</b> €20.2 📈 +1.00%\n') and '<code>' in inviati[0][1]['text']
 
 
 def test_segnale_di_myfinance_solo_senza_errori():
@@ -719,6 +740,7 @@ def test_righe_della_tabella_corte_anche_sotto_la_foto(monitor):
         {'posizione': 3, 'data': '2026-01-10', 'operazione': 'Investimento', 'importo': '-1800',
          'quantita': '100', 'abp': None}]
     monitor.borsa = BorsaFinta({'IT0003132476': 20.2})
+    monitor.config['telegram']['send_charts'] = False
     monitor.controlla_tutti()
-    tabella = monitor.telegram_inviati[0][1]['caption'].split('<code>')[1].split('</code>')[0]
+    tabella = monitor.telegram_inviati[0][1]['text'].split('<code>')[1].split('</code>')[0]
     assert max(len(riga) for riga in tabella.split('\n')) <= 26

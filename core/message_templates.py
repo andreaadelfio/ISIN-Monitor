@@ -42,6 +42,25 @@ class CaptionTemplates:
             return "⚪"
 
     @staticmethod
+    def link(isin: str, myfinance_url: Optional[str] = None, borsa_url: Optional[str] = None) -> str:
+        """I link al titolo: Fineco · Borsa IT · MyFinance."""
+        fineco_url = f"https://finecobank.com/pvt/trading/snapshot/{isin}.AFF"
+        # La scheda vera (ETF e BTP non sono fra le azioni), se il monitor l'ha già letta
+        borsa_url = borsa_url or f"https://www.borsaitaliana.it/borsa/azioni/scheda/{isin}.html"
+        links = [f'<a href="{fineco_url}">Fineco</a>', f'<a href="{borsa_url}">Borsa IT</a>']
+        if myfinance_url:
+            links.append(f'<a href="{myfinance_url}">MyFinance</a>')
+        return ' · '.join(links)
+
+    @staticmethod
+    def didascalia_foto(isin_data: Dict, myfinance_url: Optional[str] = None,
+                        borsa_url: Optional[str] = None) -> str:
+        """La didascalia del grafico: solo il nome e i link (prezzo, variazioni, segnale e
+        tabella sono già nell'immagine)."""
+        nome = escape(isin_data.get('nome') or isin_data['isin'])
+        return f"{nome}\n{CaptionTemplates.link(isin_data['isin'], myfinance_url, borsa_url)}"
+
+    @staticmethod
     @profile()
     def format_caption(isin_data: Dict, current_price: float, table_data: Optional[List[Dict]] = None,
                        myfinance_url: Optional[str] = None, borsa_url: Optional[str] = None) -> str:
@@ -56,16 +75,11 @@ class CaptionTemplates:
         """
         
         isin_code = isin_data['isin']
-        fineco_url = f"https://finecobank.com/pvt/trading/snapshot/{isin_code}.AFF"
-        # La scheda vera (ETF e BTP non sono fra le azioni), se il monitor l'ha già letta
-        borsa_url = borsa_url or f"https://www.borsaitaliana.it/borsa/azioni/scheda/{isin_code}.html"
-        links = [f'<a href="{fineco_url}">Fineco</a>', f'<a href="{borsa_url}">Borsa IT</a>']
-        if myfinance_url:
-            links.append(f'<a href="{myfinance_url}">MyFinance</a>')
+        links = CaptionTemplates.link(isin_code, myfinance_url, borsa_url)
         company_name = escape(isin_data.get('nome') or isin_code)
 
         if table_data is None:
-            return f"{company_name}: Dati non disponibili\n{' · '.join(links)}"
+            return f"{company_name}: Dati non disponibili\n{links}"
 
         # Prima riga: nome, prezzo e variazione dall'ultimo prezzo, o da ieri per un grafico
         # chiesto col comando /grafico (è la riga che si vede nella notifica del telefono)
@@ -98,7 +112,7 @@ class CaptionTemplates:
                 tabella.append(f"  {quote} quote: {row['difference'] * row['quote']:+.2f}€")
         if tabella:   # un <code></code> vuoto Telegram lo rifiuta
             righe_messaggio.append("\n<code>" + "\n".join(tabella) + "</code>")
-        righe_messaggio.append(' · '.join(links))
+        righe_messaggio.append(links)
         message = "\n".join(righe_messaggio)
 
         return message

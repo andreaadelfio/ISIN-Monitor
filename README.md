@@ -46,15 +46,16 @@ PC spento) e manda su Telegram i cambiamenti delle proposte di MyFinance.
   non sono bloccati e dopo un riavvio si riparte da zero. Il cooldown vale solo per
   questi avvisi: riepilogo, proposte, risposte ai comandi (anche /grafico) e `./setup.sh
   test` partono sempre. Un salto di più del 20% (spesso un prezzo letto male) si salva e
-  si avvisa solo se il giro dopo lo conferma. La didascalia comincia con nome, prezzo e
-  variazione dall'ultimo prezzo (è la riga che si vede nella notifica), poi il segnale
-  di MyFinance, la tabella in colonne allineate per il telefono (Prima, Apertura,
-  chiusure di 1, 7, 30 e 360 giorni fa, Inizio, Max, Min, Carico) e in fondo i link a
-  Fineco, Borsa Italiana (la scheda letta dal monitor) e alla scheda in MyFinance
-  (`<myfinance_url>/?isin=<ISIN>`). La tabella ha righe corte (circa 23 caratteri) perché
-  sotto il grafico il fumetto è stretto. Se la connessione con Telegram non parte, l'invio
-  si riprova dopo 3 e 10 secondi prima di ripiegare sul solo testo. Un avviso rimasto in
-  coda più di 30 minuti (Telegram giù) non si manda più.
+  si avvisa solo se il giro dopo lo conferma. L'avviso è il grafico con una didascalia
+  di due righe: il nome del titolo e i link a Fineco, Borsa Italiana (la scheda letta
+  dal monitor) e alla scheda in MyFinance (`<myfinance_url>/?isin=<ISIN>`); prezzo,
+  variazioni, segnale e tabella sono nell'immagine. Se il grafico non si crea, o la foto
+  non parte nemmeno dopo i nuovi tentativi (dopo 3 e 10 secondi, se la connessione con
+  Telegram non parte), arriva un messaggio di testo con tutto: nome, prezzo e variazione
+  dall'ultimo prezzo, il segnale di MyFinance, la tabella in colonne corte per il
+  telefono (Prima, Apertura, chiusure di 1, 7, 30 e 360 giorni fa, Inizio, Max, Min,
+  Carico col guadagno sulle quote) e i link. Lo stesso per /grafico. Un avviso rimasto
+  in coda più di 30 minuti (Telegram giù) non si manda più.
 - **Grafici**: solo da Supabase, quattro richieste per avviso. Immagine verticale per il
   telefono (1200×1800): in alto, a tutta larghezza, Oggi (tutti i prezzi di Borsa
   Italiana di oggi, con i punti verdi sopra l'apertura e rossi sotto); sotto, su due
