@@ -158,16 +158,36 @@ def rispondi(monitor, coda, testo: str) -> None:
         monitor.send_telegram_message(testo_aiuto())
 
 
+def stessa_chat(chat: Dict, configurata) -> bool:
+    """True se la chat del messaggio è quella di config.json: chat_id può essere l'id
+    numerico (-100... per i canali) o lo username di un canale pubblico (@nome)."""
+    configurata = str(configurata).strip()
+    if configurata.startswith('@'):
+        return (chat.get('username') or '').lower() == configurata[1:].lower()
+    return str(chat.get('id')) == configurata
+
+
+# Le chat diverse da quella di config.json già scritte nel log (una volta sola ciascuna)
+CHAT_IGNORATE: set = set()
+
+
 def gestisci(monitor, coda, aggiornamenti: List[Dict], avvio: float) -> Optional[int]:
     """Esegue i comandi di un blocco di getUpdates; restituisce il prossimo offset."""
     offset = None
-    chat = str(monitor.config['telegram'].get('chat_id'))
+    configurata = monitor.config['telegram'].get('chat_id')
     for aggiornamento in aggiornamenti:
         offset = aggiornamento['update_id'] + 1
         # In un canale i messaggi arrivano come channel_post, in un gruppo o in privato come message
         messaggio = aggiornamento.get('message') or aggiornamento.get('channel_post') or {}
-        if str(messaggio.get('chat', {}).get('id')) != chat:
-            continue   # solo la chat di Andrea
+        chat = messaggio.get('chat', {})
+        if not stessa_chat(chat, configurata):
+            # Solo la chat di Andrea; un comando da un'altra chat si segnala una volta, così
+            # un chat_id sbagliato in config.json si vede subito nel log
+            if (messaggio.get('text') or '').startswith('/') and chat.get('id') not in CHAT_IGNORATE:
+                CHAT_IGNORATE.add(chat.get('id'))
+                print(f"⚠️ Comando da una chat diversa da chat_id di config.json, ignorato: "
+                      f"id {chat.get('id')}" + (f", @{chat['username']}" if chat.get('username') else ''))
+            continue
         if messaggio.get('date', 0) < avvio - MAX_ETA_COMANDO:
             continue   # mandato a monitor spento
         try:

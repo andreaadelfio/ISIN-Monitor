@@ -91,7 +91,8 @@ PC spento) e manda su Telegram i cambiamenti delle proposte di MyFinance.
 Mentre il monitor è acceso (in orario di borsa) il bot risponde, solo alla chat di
 `config.json`, a questi comandi (in privato e nei gruppi sono anche nel menu accanto al
 campo di testo; se la chat è un canale si scrivono a mano nel canale, il bot dev'essere
-amministratore, e la risposta arriva nel canale):
+amministratore, e la risposta arriva nel canale; `chat_id` può essere `@nome` del canale o
+il suo id numerico):
 
 | Comando | Risposta |
 | --- | --- |

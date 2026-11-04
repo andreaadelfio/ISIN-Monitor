@@ -173,3 +173,29 @@ def test_comandi_scritti_nel_canale():
                                                'date': int(adesso), 'text': '/stato'}}
     assert comandi.gestisci(monitor, queue.Queue(), [post, altro], adesso) == 22
     assert len(monitor.messaggi) == 1 and 'acceso' in monitor.messaggi[0]   # risponde nel canale
+
+
+def test_canale_indicato_con_lo_username(capsys):
+    comandi.CHAT_IGNORATE.clear()
+    monitor, adesso = MonitorFinto(), time.time()
+    monitor.config['telegram']['chat_id'] = '@Canale_Prova'
+
+    def post(numero, chat):
+        return {'update_id': numero, 'channel_post': {'chat': chat, 'date': int(adesso), 'text': '/stato'}}
+
+    comandi.gestisci(monitor, queue.Queue(), [
+        post(1, {'id': -1001234567890, 'type': 'channel', 'username': 'canale_prova'}),   # sì
+        post(2, {'id': -1009999999999, 'type': 'channel', 'username': 'altro'}),           # no
+        post(3, {'id': -1009999999999, 'type': 'channel', 'username': 'altro'}),           # no
+    ], adesso)
+    assert len(monitor.messaggi) == 1 and 'acceso' in monitor.messaggi[0]
+    uscita = capsys.readouterr().out
+    # La chat sbagliata nel log una volta sola, con id e username
+    assert uscita.count('chat diversa da chat_id') == 1 and 'id -1009999999999, @altro' in uscita
+
+
+def test_canale_indicato_con_l_id_numerico():
+    assert comandi.stessa_chat({'id': -1001234567890, 'username': 'prova'}, -1001234567890)
+    assert comandi.stessa_chat({'id': -1001234567890}, '-1001234567890')
+    assert not comandi.stessa_chat({'id': -1001234567890, 'username': 'prova'}, '-100')
+    assert not comandi.stessa_chat({'id': 5, 'username': None}, '@prova')
