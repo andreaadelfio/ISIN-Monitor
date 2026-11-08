@@ -119,6 +119,7 @@ class ISINMonitor:
         self._sospetti: Dict[str, float] = {}  # ISIN -> prezzo con un salto da confermare
         # Pausa fra due avvisi sullo stesso titolo (in memoria: dopo un riavvio si riparte)
         self.errore_telegram = ''  # l'ultimo errore di Telegram, per il log dei comandi
+        self._errori_cancellazione: set = set()  # errori di deleteMessage già scritti nel log
         self.cooldown = timedelta(minutes=config['monitoring'].get('cooldown_minuti', 3))
         self._ultimi_avvisi: Dict[str, datetime] = {}  # ISIN -> ora dell'ultimo avviso
         self.richiesta_piu_lenta = ('', 0.0)  # la richiesta a Borsa più lenta dell'ultimo giro
@@ -405,6 +406,33 @@ class ISINMonitor:
         if mattino:
             mattino.join()
 
+    def sostituisci_grafico(self, titolo: Dict, inviato) -> None:
+        """Nel canale resta solo l'ultimo grafico di ogni titolo: ricorda il message_id del
+        nuovo (in grafici.json, sopravvive ai riavvii) e cancella il precedente.
+
+        Si chiama solo dopo che il nuovo grafico è partito. Telegram cancella solo messaggi
+        di meno di 48 ore e solo se il bot può eliminare i messaggi nel canale: un errore
+        si scrive nel log una volta (per tipo) e si va avanti.
+        """
+        message_id = inviato.get('message_id') if isinstance(inviato, dict) else None
+        if not message_id:
+            return
+        grafici = stato.leggi('grafici.json', {})
+        precedente = grafici.get(titolo['isin'])
+        grafici[titolo['isin']] = message_id
+        stato.scrivi('grafici.json', grafici)
+        if not precedente or not self.config['telegram'].get('cancella_grafico_precedente', True):
+            return
+        if self.chiama_telegram('deleteMessage', silenzioso=True, data={
+                'chat_id': self.config['telegram'].get('chat_id'), 'message_id': precedente}):
+            return
+        errore = self.errore_telegram
+        if errore not in self._errori_cancellazione:
+            self._errori_cancellazione.add(errore)
+            print(f"⚠️ Grafico precedente di {titolo['nome']} non cancellato, Telegram dice: {errore}. "
+                  f"Telegram cancella solo messaggi di meno di 48 ore, e nel canale il bot deve "
+                  f"poter eliminare i messaggi (lo scrivo una volta sola)")
+
     def manda_riepilogo(self) -> None:
         """Alla chiusura, un messaggio con tutti i titoli e la variazione del giorno."""
         from .comandi import testo_prezzi
@@ -520,9 +548,11 @@ class ISINMonitor:
         if tabella is None:
             tabella = TableDataGenerator.generate_table_data(prezzo, previous_price=precedente)
         scheda = self.borsa.scheda(titolo['isin'])
-        if png and self.send_telegram_photo(png, CaptionTemplates.didascalia_foto(titolo, link, scheda),
-                                            f"isin_chart_{titolo['isin']}.png"):
+        inviato = png and self.send_telegram_photo(
+            png, CaptionTemplates.didascalia_foto(titolo, link, scheda), f"isin_chart_{titolo['isin']}.png")
+        if inviato:
             print(f"📨 Grafico inviato per {titolo['nome']}")
+            self.sostituisci_grafico(titolo, inviato)
         elif self.send_telegram_message(CaptionTemplates.format_caption(titolo, prezzo, tabella,
                                                                         link, scheda)):
             print(f"📨 Messaggio inviato per {titolo['nome']}")
@@ -691,8 +721,9 @@ class ISINMonitor:
             'disable_web_page_preview': not anteprima,
         })
 
-    def send_telegram_photo(self, photo_data: bytes, caption: str = "", filename: str = "chart.png") -> bool:
-        """Invia una foto su Telegram con didascalia (HTML)."""
+    def send_telegram_photo(self, photo_data: bytes, caption: str = "", filename: str = "chart.png"):
+        """Invia una foto su Telegram con didascalia (HTML): il messaggio mandato (con il suo
+        message_id) o un valore falso se non è andato."""
         if not self.telegram_configured:
             return False
         return self._telegram('sendPhoto', data={
@@ -701,9 +732,9 @@ class ISINMonitor:
             'parse_mode': 'HTML',
         }, files={'photo': (filename, photo_data, 'image/png')})
 
-    def _telegram(self, metodo: str, **kwargs) -> bool:
-        """Manda qualcosa su Telegram: True se è andato."""
-        return self.chiama_telegram(metodo, **kwargs) is not None
+    def _telegram(self, metodo: str, **kwargs):
+        """Manda qualcosa su Telegram: il messaggio mandato (vero) o None se non è andato."""
+        return self.chiama_telegram(metodo, **kwargs)
 
     def _post_telegram(self, metodo: str, timeout: float, riprova: bool, **kwargs):
         """La richiesta a Telegram; se la connessione non parte (rete del PC lenta a tratti)

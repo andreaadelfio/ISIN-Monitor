@@ -3,8 +3,8 @@
 Stato locale di ISIN Monitor, fuori da Dropbox (~/.local/state/isin-monitor/):
 l'ultima lista dei titoli con gli ultimi prezzi (usata se Supabase non risponde),
 i prezzi non ancora scritti nel database, il giorno degli ultimi lavori del
-mattino, i titoli con lo storico Yahoo già completo e le proposte già mandate su
-Telegram. Sono piccoli file JSON.
+mattino, i titoli con lo storico Yahoo già completo, le proposte già mandate su
+Telegram e il message_id dell'ultimo grafico di ogni titolo. Sono piccoli file JSON.
 """
 
 import fcntl

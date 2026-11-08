@@ -744,3 +744,77 @@ def test_righe_della_tabella_corte_anche_sotto_la_foto(monitor):
     monitor.controlla_tutti()
     tabella = monitor.telegram_inviati[0][1]['text'].split('<code>')[1].split('</code>')[0]
     assert max(len(riga) for riga in tabella.split('\n')) <= 26
+
+
+class TelegramConFoto:
+    """sendPhoto con un message_id crescente; deleteMessage che riesce o fallisce."""
+
+    def __init__(self, monitor, cancella_ok=True, foto_ok=True):
+        self.monitor, self.cancella_ok, self.foto_ok = monitor, cancella_ok, foto_ok
+        self.prossimo, self.cancellati, self.mandati = 100, [], []
+
+    def telegram(self, metodo, **kwargs):
+        self.mandati.append(metodo)
+        if metodo == 'sendPhoto':
+            if not self.foto_ok:
+                return None
+            self.prossimo += 1
+            return {'message_id': self.prossimo}
+        return {'message_id': 1}
+
+    def chiama(self, metodo, **kwargs):
+        assert metodo == 'deleteMessage' and kwargs['data']['chat_id'] == '1'
+        if self.cancella_ok:
+            self.cancellati.append(kwargs['data']['message_id'])
+            return True
+        self.monitor.errore_telegram = 'Bad Request: message can\'t be deleted (400)'
+        return None
+
+
+def manda_grafico(monitor, prezzo):
+    titolo = monitor.carica_titoli()[0]
+    monitor.invia_avviso(titolo, prezzo, 20.0, datetime.now(modulo_app.ROMA))
+
+
+def test_nel_canale_resta_solo_l_ultimo_grafico(monitor):
+    finto = TelegramConFoto(monitor)
+    monitor._telegram, monitor.chiama_telegram = finto.telegram, finto.chiama
+    manda_grafico(monitor, 20.2)                       # primo grafico: niente da cancellare
+    assert finto.cancellati == [] and stato.leggi('grafici.json') == {'IT0003132476': 101}
+    manda_grafico(monitor, 20.4)                       # il secondo cancella il primo
+    assert finto.cancellati == [101] and stato.leggi('grafici.json') == {'IT0003132476': 102}
+
+    # Dopo un riavvio il message_id è ancora nel file di stato
+    nuovo = ISINMonitor(monitor.config)
+    nuovo.db, nuovo.borsa = monitor.db, monitor.borsa
+    nuovo._telegram, nuovo.chiama_telegram = finto.telegram, finto.chiama
+    manda_grafico(nuovo, 20.6)
+    assert finto.cancellati == [101, 102]
+
+
+def test_se_la_foto_non_parte_il_vecchio_grafico_resta(monitor):
+    stato.scrivi('grafici.json', {'IT0003132476': 55})
+    finto = TelegramConFoto(monitor, foto_ok=False)
+    monitor._telegram, monitor.chiama_telegram = finto.telegram, finto.chiama
+    manda_grafico(monitor, 20.2)
+    assert finto.mandati == ['sendPhoto', 'sendMessage'] and finto.cancellati == []
+    assert stato.leggi('grafici.json') == {'IT0003132476': 55}
+
+
+def test_cancellazione_fallita_scritta_una_volta(monitor, capsys):
+    finto = TelegramConFoto(monitor, cancella_ok=False)
+    monitor._telegram, monitor.chiama_telegram = finto.telegram, finto.chiama
+    for prezzo in (20.2, 20.4, 20.6):
+        manda_grafico(monitor, prezzo)
+    uscita = capsys.readouterr().out
+    assert uscita.count('non cancellato') == 1 and "message can't be deleted" in uscita
+    assert stato.leggi('grafici.json') == {'IT0003132476': 103}   # si va avanti col nuovo
+
+
+def test_cancellazione_spenta_da_config(monitor):
+    monitor.config['telegram']['cancella_grafico_precedente'] = False
+    finto = TelegramConFoto(monitor)
+    monitor._telegram, monitor.chiama_telegram = finto.telegram, finto.chiama
+    manda_grafico(monitor, 20.2)
+    manda_grafico(monitor, 20.4)
+    assert finto.cancellati == []
