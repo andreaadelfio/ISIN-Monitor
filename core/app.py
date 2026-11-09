@@ -13,6 +13,7 @@ rallentano mai i giri. Al primo giro di ogni giorno, in un altro thread, riempie
 Yahoo i buchi dello storico e manda i cambiamenti delle proposte di MyFinance.
 """
 
+import json
 import queue
 import threading
 import time
@@ -53,6 +54,10 @@ ATTESE_RETE_TELEGRAM = [3, 10]
 MAX_ATTESA_TELEGRAM = 120
 # Pausa dopo una risposta 429 (troppe richieste) di Borsa Italiana
 PAUSA_429 = 60
+# Secondi fra un grafico aggiornato e l'altro (per non prendere 429 da Telegram)
+PAUSA_GRAFICI = 3
+# Elemento della coda degli avvisi: l'ultimo aggiornamento dei grafici, alla chiusura
+AGGIORNA_TUTTI = 'aggiorna tutti i grafici'
 
 
 def descrivi(errore: Exception) -> str:
@@ -119,7 +124,14 @@ class ISINMonitor:
         self._sospetti: Dict[str, float] = {}  # ISIN -> prezzo con un salto da confermare
         # Pausa fra due avvisi sullo stesso titolo (in memoria: dopo un riavvio si riparte)
         self.errore_telegram = ''  # l'ultimo errore di Telegram, per il log dei comandi
-        self._errori_cancellazione: set = set()  # errori di deleteMessage già scritti nel log
+        self._errori_grafici: set = set()  # errori di Telegram sui grafici già scritti nel log
+        # I grafici già nel canale si aggiornano ogni tot minuti (0: mai)
+        self.aggiorna_grafici_ogni = 60 * telegram.get('aggiorna_grafici_minuti', 30)
+        if not telegram.get('send_charts', True):
+            self.aggiorna_grafici_ogni = 0
+        self._prossimo_aggiornamento = 0.0              # time.monotonic()
+        self._grafici_da_aggiornare: List[str] = []     # gli ISIN del giro in corso
+        self._prezzi_nei_grafici: Dict[str, float] = {}  # ISIN -> prezzo dell'ultimo grafico
         self.cooldown = timedelta(minutes=config['monitoring'].get('cooldown_minuti', 3))
         self._ultimi_avvisi: Dict[str, datetime] = {}  # ISIN -> ora dell'ultimo avviso
         self.richiesta_piu_lenta = ('', 0.0)  # la richiesta a Borsa più lenta dell'ultimo giro
@@ -398,10 +410,13 @@ class ISINMonitor:
 
         print(f"⏹️ Fine dei giri: {fatti} giri ({errori} con errori), {mandati} avvisi; "
               f"finisco quelli in coda ed esco")
+        # Riepilogo e ultimo aggiornamento dei grafici solo alla vera chiusura, dopo una
+        # giornata di giri (non nelle prove)
+        chiusura = fatti and not ignora_orario and giri is None and self.telegram_configured
+        if chiusura and self.aggiorna_grafici_ogni:
+            coda.put(AGGIORNA_TUTTI)
         coda.join()
-        # Il riepilogo solo alla vera chiusura, dopo una giornata di giri (non nelle prove)
-        if (fatti and not ignora_orario and giri is None and self.telegram_configured
-                and self.config['telegram'].get('riepilogo', True)):
+        if chiusura and self.config['telegram'].get('riepilogo', True):
             self.manda_riepilogo()
         if mattino:
             mattino.join()
@@ -427,11 +442,83 @@ class ISINMonitor:
                 'chat_id': self.config['telegram'].get('chat_id'), 'message_id': precedente}):
             return
         errore = self.errore_telegram
-        if errore not in self._errori_cancellazione:
-            self._errori_cancellazione.add(errore)
+        if errore not in self._errori_grafici:
+            self._errori_grafici.add(errore)
             print(f"⚠️ Grafico precedente di {titolo['nome']} non cancellato, Telegram dice: {errore}. "
                   f"Telegram cancella solo messaggi di meno di 48 ore, e nel canale il bot deve "
                   f"poter eliminare i messaggi (lo scrivo una volta sola)")
+
+    def _attesa_avvisi(self) -> Optional[float]:
+        """Quanto aspettare un avviso prima di passare ai grafici (None: senza limite)."""
+        if not self.aggiorna_grafici_ogni or not self.telegram_configured:
+            return None
+        if self._grafici_da_aggiornare:
+            return PAUSA_GRAFICI
+        return min(max(self._prossimo_aggiornamento - time.monotonic(), 0.01), 60)
+
+    def _aggiorna_prossimo_grafico(self) -> None:
+        """Con la coda vuota: se è ora comincia un giro di grafici, e ne aggiorna uno."""
+        if not self._grafici_da_aggiornare and time.monotonic() >= self._prossimo_aggiornamento:
+            self._grafici_da_aggiornare = list(stato.leggi('grafici.json', {}))
+            self._prossimo_aggiornamento = time.monotonic() + self.aggiorna_grafici_ogni
+        if self._grafici_da_aggiornare:
+            self.aggiorna_grafico(self._grafici_da_aggiornare.pop(0))
+
+    def _aggiorna_tutti_i_grafici(self) -> None:
+        """L'ultimo aggiornamento alla chiusura, così nel canale resta la giornata completa."""
+        self._grafici_da_aggiornare = []
+        for isin in stato.leggi('grafici.json', {}):
+            if self.aggiorna_grafico(isin):
+                time.sleep(PAUSA_GRAFICI)
+
+    def aggiorna_grafico(self, isin: str) -> bool:
+        """Ridisegna il grafico di un titolo e sostituisce l'immagine nello stesso messaggio
+        (editMessageMedia: nessuna notifica). True se ha chiamato Telegram.
+
+        Salta i titoli col prezzo uguale a quello dell'ultimo grafico. Un errore non ferma
+        gli altri grafici e si scrive nel log una volta per tipo.
+        """
+        try:
+            message_id = stato.leggi('grafici.json', {}).get(isin)
+            titolo = next((t for t in stato.leggi('titoli.json', []) if t['isin'] == isin), None)
+            if not message_id or not titolo or titolo.get('ultimo_prezzo') is None:
+                return False
+            prezzo = titolo['ultimo_prezzo']
+            if self._prezzi_nei_grafici.get(isin) == prezzo:
+                return False
+            png, _ = self.grafico(titolo, prezzo, None, datetime.now(ROMA).replace(microsecond=0))
+            if png is None:
+                return False
+            didascalia = CaptionTemplates.didascalia_foto(
+                titolo, proposte.link_myfinance(self.myfinance_url, isin), self.borsa.scheda(isin))
+            # La didascalia va ripetuta: editMessageMedia sostituisce anche quella
+            risultato = self.chiama_telegram('editMessageMedia', silenzioso=True, data={
+                'chat_id': self.config['telegram'].get('chat_id'),
+                'message_id': message_id,
+                'media': json.dumps({'type': 'photo', 'media': 'attach://foto',
+                                     'caption': didascalia, 'parse_mode': 'HTML'}),
+            }, files={'foto': (f"isin_chart_{isin}.png", png, 'image/png')})
+        except Exception as errore:
+            self._scrivi_errore_grafico(f"{isin}: {descrivi(errore)}")
+            return False
+        errore = '' if risultato is not None else self.errore_telegram
+        if not errore or 'not modified' in errore:
+            self._prezzi_nei_grafici[isin] = prezzo
+            print(f"🖼️ Grafico aggiornato per {titolo['nome']}")
+        elif 'not found' in errore or 'MESSAGE_ID_INVALID' in errore:
+            # Il messaggio non c'è più (cancellato a mano): non si riprova
+            grafici = stato.leggi('grafici.json', {})
+            grafici.pop(isin, None)
+            stato.scrivi('grafici.json', grafici)
+            print(f"🗑️ Il grafico di {titolo['nome']} non è più nel canale: non lo aggiorno più")
+        else:
+            self._scrivi_errore_grafico(errore)
+        return True
+
+    def _scrivi_errore_grafico(self, errore: str) -> None:
+        if errore not in self._errori_grafici:
+            self._errori_grafici.add(errore)
+            print(f"⚠️ Aggiornamento dei grafici, Telegram dice: {errore} (lo scrivo una volta sola)")
 
     def manda_riepilogo(self) -> None:
         """Alla chiusura, un messaggio con tutti i titoli e la variazione del giorno."""
@@ -446,11 +533,21 @@ class ISINMonitor:
         """Thread degli avvisi: uno alla volta, nell'ordine in cui arrivano.
 
         Un avviso rimasto in coda troppo a lungo (Telegram giù per ore) non si manda più:
-        arriverebbe insieme a tutti gli altri, con un prezzo ormai vecchio.
+        arriverebbe insieme a tutti gli altri, con un prezzo ormai vecchio. Quando la coda
+        è vuota aggiorna i grafici già nel canale, uno alla volta: gli avvisi passano avanti
+        e matplotlib lo usa sempre questo thread.
         """
+        self._prossimo_aggiornamento = time.monotonic() + self.aggiorna_grafici_ogni
         while True:
-            avviso = coda.get()
             try:
+                avviso = coda.get(timeout=self._attesa_avvisi())
+            except queue.Empty:
+                self._aggiorna_prossimo_grafico()
+                continue
+            try:
+                if avviso == AGGIORNA_TUTTI:
+                    self._aggiorna_tutti_i_grafici()
+                    continue
                 ritardo = datetime.now(ROMA) - avviso['adesso']
                 if ritardo > MAX_RITARDO_AVVISO:
                     print(f"⏭️ Avviso per {avviso['titolo']['nome']} delle {avviso['adesso']:%H:%M} "
@@ -552,6 +649,7 @@ class ISINMonitor:
             png, CaptionTemplates.didascalia_foto(titolo, link, scheda), f"isin_chart_{titolo['isin']}.png")
         if inviato:
             print(f"📨 Grafico inviato per {titolo['nome']}")
+            self._prezzi_nei_grafici[titolo['isin']] = prezzo
             self.sostituisci_grafico(titolo, inviato)
         elif self.send_telegram_message(CaptionTemplates.format_caption(titolo, prezzo, tabella,
                                                                         link, scheda)):

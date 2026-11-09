@@ -63,6 +63,14 @@ PC spento) e manda su Telegram i cambiamenti delle proposte di MyFinance.
   solo se il bot, amministratore del canale, ha il permesso di eliminare i messaggi; se
   non riesce il log lo dice una volta. Riepilogo, proposte e messaggi di solo testo
   restano. Per spegnerlo: `telegram.cancella_grafico_precedente: false`.
+  I grafici già nel canale si aggiornano da soli ogni 30 minuti
+  (`telegram.aggiorna_grafici_minuti`, 0 per spegnerlo) e un'ultima volta alla chiusura:
+  l'immagine cambia nello stesso messaggio, senza notifiche né messaggi nuovi. Lo fa il
+  thread degli avvisi quando non ha avvisi da mandare, un grafico ogni 3 secondi, quindi
+  i giri dei prezzi non rallentano e gli avvisi veri passano avanti. Un titolo col
+  prezzo uguale all'ultimo grafico si salta; se il messaggio non c'è più (cancellato a
+  mano) il titolo esce da `grafici.json`; gli altri errori vanno nel log una volta per
+  tipo.
 - **Grafici**: solo da Supabase, quattro richieste per avviso. Immagine verticale per il
   telefono (1200×1800): in alto, a tutta larghezza, Oggi (tutti i prezzi di Borsa
   Italiana di oggi, con i punti verdi sopra l'apertura e rossi sotto); sotto, su due
@@ -185,6 +193,7 @@ python3 monitor.py --giro --ignora-orario      # un giro solo, anche fuori orari
 | `telegram.enabled`, `send_charts` | avvisi attivi; grafico o solo testo |
 | `telegram.comandi`, `riepilogo` | comandi del bot; riepilogo alla chiusura (tutti e due attivi se mancano) |
 | `telegram.cancella_grafico_precedente` | nel canale solo l'ultimo grafico di ogni titolo (attivo se manca) |
+| `telegram.aggiorna_grafici_minuti` | ogni quanto si aggiornano i grafici già nel canale (30 se manca, 0 per spegnerlo) |
 | `monitoring.market_hours_only`, `weekdays_only` | solo in orario di borsa, solo lun-ven |
 | `monitoring.cooldown_minuti` | minuti fra due avvisi sullo stesso titolo (3 se manca) |
 | `monitoring.market_open_time`, `market_close_time` | orario (anche del timer systemd) |

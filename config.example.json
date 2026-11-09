@@ -8,7 +8,8 @@
     "send_charts": true,
     "comandi": true,
     "riepilogo": true,
-    "cancella_grafico_precedente": true
+    "cancella_grafico_precedente": true,
+    "aggiorna_grafici_minuti": 30
   },
   "monitoring": {
     "market_hours_only": true,

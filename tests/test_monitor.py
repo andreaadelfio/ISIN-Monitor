@@ -818,3 +818,119 @@ def test_cancellazione_spenta_da_config(monitor):
     manda_grafico(monitor, 20.2)
     manda_grafico(monitor, 20.4)
     assert finto.cancellati == []
+
+
+class TelegramChePuoFallire:
+    """editMessageMedia finto: `errori` dice cosa risponde Telegram per ogni message_id."""
+
+    def __init__(self, monitor, errori=None):
+        self.monitor, self.errori = monitor, errori or {}
+        self.modifiche = []
+
+    def chiama(self, metodo, **kwargs):
+        assert metodo == 'editMessageMedia' and kwargs['silenzioso']
+        self.modifiche.append(kwargs)
+        errore = self.errori.get(kwargs['data']['message_id'])
+        if errore:
+            self.monitor.errore_telegram = errore
+            return None
+        return {'message_id': kwargs['data']['message_id']}
+
+
+def prepara_grafici(monitor, **grafici):
+    monitor.carica_titoli()
+    titoli = stato.leggi('titoli.json')
+    titoli[1]['ultimo_prezzo'] = 220.0                 # Amazon: nella lista del DbFinto non ha prezzi
+    stato.scrivi('titoli.json', titoli)
+    stato.scrivi('grafici.json', grafici)
+    finto = TelegramChePuoFallire(monitor)
+    monitor.chiama_telegram = finto.chiama
+    return finto
+
+
+def test_grafico_aggiornato_nello_stesso_messaggio(monitor):
+    import json
+    finto = prepara_grafici(monitor, IT0003132476=55)
+    assert monitor.aggiorna_grafico('IT0003132476')
+    assert monitor.telegram_inviati == []                    # niente messaggi nuovi
+    dati = finto.modifiche[0]['data']
+    media = json.loads(dati['media'])
+    assert dati['message_id'] == 55 and media['type'] == 'photo' and media['media'] == 'attach://foto'
+    assert media['caption'].startswith('Eni\n<a href=') and media['parse_mode'] == 'HTML'
+    assert finto.modifiche[0]['files']['foto'][1].startswith(b'\x89PNG')
+    assert stato.leggi('grafici.json') == {'IT0003132476': 55}
+
+    # Prezzo uguale: saltato; prezzo cambiato: aggiornato
+    assert not monitor.aggiorna_grafico('IT0003132476') and len(finto.modifiche) == 1
+    titoli = stato.leggi('titoli.json')
+    titoli[0]['ultimo_prezzo'] = 20.5
+    stato.scrivi('titoli.json', titoli)
+    assert monitor.aggiorna_grafico('IT0003132476') and len(finto.modifiche) == 2
+
+
+def test_grafico_appena_mandato_non_si_riaggiorna(monitor):
+    finto = prepara_grafici(monitor, IT0003132476=55)
+    monitor._prezzi_nei_grafici['IT0003132476'] = 20.0       # l'avviso l'ha appena disegnato
+    assert not monitor.aggiorna_grafico('IT0003132476') and finto.modifiche == []
+
+
+def test_errori_dell_aggiornamento(monitor, capsys):
+    finto = prepara_grafici(monitor, IT0003132476=55, US0231351067=66)
+    finto.errori = {55: 'Bad Request: message to edit not found (400)',
+                    66: 'Bad Request: message is not modified: specified new message content (400)'}
+    monitor.aggiorna_grafico('IT0003132476')
+    monitor.aggiorna_grafico('US0231351067')
+    # Messaggio sparito: tolto dal file; "not modified": come riuscito, senza errori
+    assert stato.leggi('grafici.json') == {'US0231351067': 66}
+    assert not monitor.aggiorna_grafico('US0231351067')
+    uscita = capsys.readouterr().out
+    assert 'non è più nel canale' in uscita and 'Telegram dice' not in uscita
+
+    # Un altro errore: una volta sola nel log, si va avanti e si riprova al giro dopo
+    finto.errori = {66: 'Bad Request: not enough rights (400)'}
+    monitor._prezzi_nei_grafici.clear()
+    monitor.aggiorna_grafico('US0231351067')
+    monitor.aggiorna_grafico('US0231351067')
+    assert len(finto.modifiche) == 4
+    assert capsys.readouterr().out.count('not enough rights') == 1
+    assert stato.leggi('grafici.json') == {'US0231351067': 66}
+
+
+def test_grafici_uno_alla_volta_ogni_trenta_minuti(monitor):
+    finto = prepara_grafici(monitor, IT0003132476=55, US0231351067=66)
+    assert monitor.aggiorna_grafici_ogni == 1800
+    monitor._prossimo_aggiornamento = modulo_app.time.monotonic() + 1800
+    monitor._aggiorna_prossimo_grafico()                     # non è ancora ora
+    assert finto.modifiche == []
+    modulo_app.time.sleep(1800)
+    monitor._aggiorna_prossimo_grafico()
+    assert [m['data']['message_id'] for m in finto.modifiche] == [55]
+    assert monitor._grafici_da_aggiornare == ['US0231351067']
+    assert monitor._attesa_avvisi() == modulo_app.PAUSA_GRAFICI   # distanziati
+    monitor._aggiorna_prossimo_grafico()
+    assert [m['data']['message_id'] for m in finto.modifiche] == [55, 66]
+    monitor._aggiorna_prossimo_grafico()                     # giro finito: si aspetta il prossimo
+    assert len(finto.modifiche) == 2 and monitor._attesa_avvisi() > modulo_app.PAUSA_GRAFICI
+
+
+def test_ultimo_aggiornamento_alla_chiusura_dopo_gli_avvisi(monitor, monkeypatch):
+    finto = prepara_grafici(monitor, IT0003132476=55, US0231351067=66)
+    ordine = []
+    invia = monitor.invia_avviso
+    monkeypatch.setattr(monitor, 'invia_avviso', lambda **a: (ordine.append('avviso'), invia(**a)))
+    chiama = finto.chiama
+    monitor.chiama_telegram = lambda metodo, **k: (ordine.append(metodo), chiama(metodo, **k))[1]
+    orari = iter([True, False])
+    monkeypatch.setattr(modulo_app, 'in_orario', lambda monitoring, adesso: next(orari))
+    monitor.borsa = BorsaFinta({'IT0003132476': 20.2, 'US0231351067': 221.0})
+    monitor.monitora()
+    # Eni ha appena avuto l'avviso (grafico già aggiornato): alla chiusura si aggiorna Amazon
+    assert ordine == ['avviso', 'editMessageMedia']
+    assert finto.modifiche[0]['data']['message_id'] == 66
+    assert monitor.telegram_inviati[-1][1]['text'].startswith('📊 <b>Chiusura di oggi')
+
+
+def test_aggiornamento_grafici_spento(config):
+    config['telegram']['aggiorna_grafici_minuti'] = 0
+    istanza = ISINMonitor(config)
+    assert istanza.aggiorna_grafici_ogni == 0 and istanza._attesa_avvisi() is None
