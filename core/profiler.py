@@ -4,15 +4,13 @@ Sistema di profiling per ISIN Monitor
 """
 
 import cProfile
-import pstats
 import functools
 import builtins
 import time
 import threading
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Dict, Callable, Any
 import os
-import json
 import csv
 import pandas as pd
 
@@ -212,36 +210,6 @@ class PerformanceProfiler:
         print(f"Totale chiamate: {total_calls}")
         print(f"Tempo totale esecuzione: {total_time:.4f}s")
     
-    def save_detailed_report(self, filename: str = None, include_prof_files: bool = False):
-        """
-        Salva un report dettagliato in formato JSON e CSV
-        
-        Args:
-            filename: Nome del file (opzionale)
-            include_prof_files: Se True, salva anche file .prof per analisi dettagliate
-        """
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        if filename is None:
-            filename = f"performance_report_{timestamp}"
-        
-        stats = self.get_statistics()
-        
-        # Report JSON
-        json_file = f"{self.output_dir}/{filename}.json"
-        with open(json_file, 'w', encoding='utf-8') as f:
-            json.dump(stats, f, indent=2, ensure_ascii=False, default=str)
-        
-        # Se richiesto, genera file .prof per analisi approfondite
-        if include_prof_files:
-            print(f"⚠️  Generazione file .prof richiesta - questo creerà molti file!")
-            # Qui potremmo aggiungere logica per generare file .prof on-demand
-        
-        # I dati CSV sono già salvati in tempo reale
-        print(f"Report salvato:")
-        print(f"  📄 JSON: {json_file}")
-        print(f"  📊 CSV (live): {self.csv_file}")
-        if not include_prof_files:
-            print(f"  💡 Per file .prof dettagliati usa include_prof_files=True")
     
     def get_csv_data(self, function_filter: str = None) -> pd.DataFrame:
         """
@@ -267,146 +235,8 @@ class PerformanceProfiler:
             print(f"Errore nel leggere CSV: {e}")
             return pd.DataFrame()
     
-    def analyze_performance_trends(self, function_name: str = None, last_n_days: int = 7):
-        """
-        Analizza i trend di performance
-        
-        Args:
-            function_name: Nome funzione specifica (opzionale)
-            last_n_days: Numero di giorni da analizzare
-        """
-        df = self.get_csv_data(function_name)
-        
-        if df.empty:
-            print("Nessun dato disponibile per l'analisi")
-            return
-        
-        # Filtra per ultimi N giorni
-        cutoff_date = datetime.now() - timedelta(days=last_n_days)
-        df = df[df['timestamp'] >= cutoff_date]
-        
-        if df.empty:
-            print(f"Nessun dato negli ultimi {last_n_days} giorni")
-            return
-        
-        # Raggruppa per funzione e calcola statistiche
-        stats = df.groupby('function_name')['execution_time'].agg([
-            'count', 'mean', 'std', 'min', 'max'
-        ]).round(6)
-        
-        print(f"\n=== Analisi Performance - Ultimi {last_n_days} giorni ===")
-        print(stats)
-        
-        # Trova funzioni più lente
-        print(f"\n=== Top 10 Funzioni più Lente (tempo medio) ===")
-        top_slow = stats.sort_values('mean', ascending=False).head(10)
-        for func, row in top_slow.iterrows():
-            print(f"{func}: {row['mean']:.6f}s (chiamate: {row['count']})")
-        
-        return stats
     
-    def compare_sessions(self, session1: str = None, session2: str = None):
-        """
-        Confronta performance tra due sessioni
-        
-        Args:
-            session1, session2: ID sessione o timestamp (se None, usa le ultime due)
-        """
-        df = self.get_csv_data()
-        
-        if df.empty:
-            print("Nessun dato disponibile per il confronto")
-            return
-        
-        sessions = df['session_id'].unique()
-        
-        if len(sessions) < 2:
-            print("Servono almeno 2 sessioni per il confronto")
-            return
-        
-        if session1 is None or session2 is None:
-            sessions = sorted(sessions)
-            session1 = sessions[-2] if session1 is None else session1
-            session2 = sessions[-1] if session2 is None else session2
-        
-        df1 = df[df['session_id'] == session1]
-        df2 = df[df['session_id'] == session2]
-        
-        if df1.empty or df2.empty:
-            print("Una delle sessioni è vuota")
-            return
-        
-        stats1 = df1.groupby('function_name')['execution_time'].mean()
-        stats2 = df2.groupby('function_name')['execution_time'].mean()
-        
-        comparison = pd.DataFrame({
-            'session1_avg': stats1,
-            'session2_avg': stats2
-        }).fillna(0)
-        
-        comparison['diff'] = comparison['session2_avg'] - comparison['session1_avg']
-        comparison['percent_change'] = ((comparison['session2_avg'] / comparison['session1_avg']) - 1) * 100
-        comparison = comparison.fillna(0)
-        
-        print(f"\n=== Confronto Sessioni: {session1} vs {session2} ===")
-        print(comparison.round(6))
-        
-        # Maggiori miglioramenti
-        improvements = comparison[comparison['diff'] < -0.001].sort_values('diff')
-        if not improvements.empty:
-            print(f"\n=== Maggiori Miglioramenti ===")
-            for func, row in improvements.head(5).iterrows():
-                print(f"{func}: {row['diff']:.6f}s ({row['percent_change']:.1f}%)")
-        
-        # Maggiori peggioramenti
-        regressions = comparison[comparison['diff'] > 0.001].sort_values('diff', ascending=False)
-        if not regressions.empty:
-            print(f"\n=== Maggiori Peggioramenti ===")
-            for func, row in regressions.head(5).iterrows():
-                print(f"{func}: +{row['diff']:.6f}s (+{row['percent_change']:.1f}%)")
-        
-        return comparison
     
-    def profile_script(self, script_path: str, *args):
-        """
-        Profila un intero script
-        """
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        profile_file = f"{self.output_dir}/script_profile_{timestamp}.prof"
-        
-        # Esegue lo script con profiling
-        import subprocess
-        import sys
-        
-        cmd = [
-            sys.executable, "-m", "cProfile", "-o", profile_file,
-            script_path, *args
-        ]
-        
-        print(f"Eseguendo profiling di {script_path}...")
-        start_time = time.perf_counter()
-        
-        result = subprocess.run(cmd, capture_output=True, text=True, check=False)
-        
-        end_time = time.perf_counter()
-        
-        print(f"Script completato in {end_time - start_time:.4f}s")
-        
-        if result.returncode == 0:
-            print(f"Profiling salvato in: {profile_file}")
-            
-            # Genera anche report testuale
-            stats_file = f"{self.output_dir}/script_stats_{timestamp}.txt"
-            with open(stats_file, 'w', encoding='utf-8') as f:
-                stats = pstats.Stats(profile_file, stream=f)
-                stats.sort_stats('cumulative')
-                stats.print_stats()
-            
-            print(f"Statistiche dettagliate in: {stats_file}")
-        else:
-            print(f"Errore nell'esecuzione: {result.stderr}")
-        
-        return result.returncode == 0
 
 
 # Istanza globale del profiler
@@ -428,11 +258,6 @@ def profile(include_detailed=False):
         return wrapper
     return decorator
 
-def profile_detailed(func):
-    """
-    Decoratore per profiling dettagliato (cProfile)
-    """
-    return profile(include_detailed=True)(func)
 
 
 if __name__ == "__main__":
