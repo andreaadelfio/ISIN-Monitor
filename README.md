@@ -64,10 +64,11 @@ PC spento) e manda su Telegram i cambiamenti delle proposte di MyFinance.
   non riesce il log lo dice una volta. Riepilogo, proposte e messaggi di solo testo
   restano. Per spegnerlo: `telegram.cancella_grafico_precedente: false`.
   I grafici già nel canale si aggiornano da soli ogni 30 minuti
-  (`telegram.aggiorna_grafici_minuti`, 0 per spegnerlo) e un'ultima volta alla chiusura:
+  (`telegram.aggiorna_grafici_minuti`, 0 per spegnerlo; il primo giro 30 minuti dopo l'avvio)
+  e un'ultima volta alla chiusura, tutti anche col prezzo invariato, prima del riepilogo:
   l'immagine cambia nello stesso messaggio, senza notifiche né messaggi nuovi. Lo fa il
   thread degli avvisi quando non ha avvisi da mandare, un grafico ogni 3 secondi, quindi
-  i giri dei prezzi non rallentano e gli avvisi veri passano avanti. Un titolo col
+  i giri dei prezzi non rallentano e gli avvisi veri passano avanti. Durante il giorno un titolo col
   prezzo uguale all'ultimo grafico si salta; se il messaggio non c'è più (cancellato a
   mano) il titolo esce da `grafici.json`; gli altri errori vanno nel log una volta per
   tipo.

@@ -924,9 +924,9 @@ def test_ultimo_aggiornamento_alla_chiusura_dopo_gli_avvisi(monitor, monkeypatch
     monkeypatch.setattr(modulo_app, 'in_orario', lambda monitoring, adesso: next(orari))
     monitor.borsa = BorsaFinta({'IT0003132476': 20.2, 'US0231351067': 221.0})
     monitor.monitora()
-    # Eni ha appena avuto l'avviso (grafico già aggiornato): alla chiusura si aggiorna Amazon
-    assert ordine == ['avviso', 'editMessageMedia']
-    assert finto.modifiche[0]['data']['message_id'] == 66
+    # Prima l'avviso di Eni, poi alla chiusura tutti i grafici (Eni compreso)
+    assert ordine == ['avviso', 'editMessageMedia', 'editMessageMedia']
+    assert [m['data']['message_id'] for m in finto.modifiche] == [55, 66]
     assert monitor.telegram_inviati[-1][1]['text'].startswith('📊 <b>Chiusura di oggi')
 
 
@@ -934,3 +934,19 @@ def test_aggiornamento_grafici_spento(config):
     config['telegram']['aggiorna_grafici_minuti'] = 0
     istanza = ISINMonitor(config)
     assert istanza.aggiorna_grafici_ogni == 0 and istanza._attesa_avvisi() is None
+
+
+def test_alla_chiusura_si_aggiornano_anche_i_grafici_col_prezzo_invariato(monitor, monkeypatch):
+    # Come il 10/11: ultimo giro dei grafici alle 17:41, poi nessun prezzo nuovo fino alle 18:05
+    finto = prepara_grafici(monitor, IT0003132476=55, US0231351067=66)
+    monitor._prezzi_nei_grafici.update({'IT0003132476': 20.0, 'US0231351067': 220.0})
+    ordine = []
+    chiama = finto.chiama
+    monitor.chiama_telegram = lambda metodo, **k: (ordine.append(metodo), chiama(metodo, **k))[1]
+    monitor._telegram = lambda metodo, **k: (ordine.append(metodo), True)[1]
+    orari = iter([True, False])
+    monkeypatch.setattr(modulo_app, 'in_orario', lambda monitoring, adesso: next(orari))
+    monitor.borsa = BorsaFinta({'US0231351067': 220.0})   # Eni senza prezzo nuovo, Amazon uguale
+    monitor.monitora()
+    assert [m['data']['message_id'] for m in finto.modifiche] == [55, 66]
+    assert ordine == ['editMessageMedia', 'editMessageMedia', 'sendMessage']   # poi il riepilogo

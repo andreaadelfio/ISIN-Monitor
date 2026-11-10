@@ -468,14 +468,16 @@ class ISINMonitor:
         """L'ultimo aggiornamento alla chiusura, così nel canale resta la giornata completa."""
         self._grafici_da_aggiornare = []
         for isin in stato.leggi('grafici.json', {}):
-            if self.aggiorna_grafico(isin):
+            # Anche col prezzo invariato: l'ultima versione della giornata
+            if self.aggiorna_grafico(isin, sempre=True):
                 time.sleep(PAUSA_GRAFICI)
 
-    def aggiorna_grafico(self, isin: str) -> bool:
+    def aggiorna_grafico(self, isin: str, sempre: bool = False) -> bool:
         """Ridisegna il grafico di un titolo e sostituisce l'immagine nello stesso messaggio
         (editMessageMedia: nessuna notifica). True se ha chiamato Telegram.
 
-        Salta i titoli col prezzo uguale a quello dell'ultimo grafico. Un errore non ferma
+        Salta i titoli col prezzo uguale a quello dell'ultimo grafico (non con `sempre`,
+        l'aggiornamento alla chiusura). Un errore non ferma
         gli altri grafici e si scrive nel log una volta per tipo.
         """
         try:
@@ -484,7 +486,7 @@ class ISINMonitor:
             if not message_id or not titolo or titolo.get('ultimo_prezzo') is None:
                 return False
             prezzo = titolo['ultimo_prezzo']
-            if self._prezzi_nei_grafici.get(isin) == prezzo:
+            if not sempre and self._prezzi_nei_grafici.get(isin) == prezzo:
                 return False
             png, _ = self.grafico(titolo, prezzo, None, datetime.now(ROMA).replace(microsecond=0))
             if png is None:
