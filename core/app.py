@@ -13,7 +13,6 @@ rallentano mai i giri. Al primo giro di ogni giorno, in un altro thread, riempie
 Yahoo i buchi dello storico e manda i cambiamenti delle proposte di MyFinance.
 """
 
-import json
 import queue
 import threading
 import time
@@ -473,17 +472,17 @@ class ISINMonitor:
                 time.sleep(PAUSA_GRAFICI)
 
     def aggiorna_grafico(self, isin: str, sempre: bool = False) -> bool:
-        """Ridisegna il grafico di un titolo e sostituisce l'immagine nello stesso messaggio
-        (editMessageMedia: nessuna notifica). True se ha chiamato Telegram.
+        """Ridisegna il grafico di un titolo che ha già un grafico nel canale e lo manda come
+        messaggio nuovo (con la notifica), cancellando il vecchio. True se ha chiamato Telegram.
 
         Salta i titoli col prezzo uguale a quello dell'ultimo grafico (non con `sempre`,
-        l'aggiornamento alla chiusura). Un errore non ferma
-        gli altri grafici e si scrive nel log una volta per tipo.
+        l'aggiornamento alla chiusura). Un errore non ferma gli altri grafici e si scrive
+        nel log una volta per tipo.
         """
         try:
-            message_id = stato.leggi('grafici.json', {}).get(isin)
             titolo = next((t for t in stato.leggi('titoli.json', []) if t['isin'] == isin), None)
-            if not message_id or not titolo or titolo.get('ultimo_prezzo') is None:
+            if (isin not in stato.leggi('grafici.json', {}) or not titolo
+                    or titolo.get('ultimo_prezzo') is None):
                 return False
             prezzo = titolo['ultimo_prezzo']
             if not sempre and self._prezzi_nei_grafici.get(isin) == prezzo:
@@ -491,31 +490,25 @@ class ISINMonitor:
             png, _ = self.grafico(titolo, prezzo, None, datetime.now(ROMA).replace(microsecond=0))
             if png is None:
                 return False
-            didascalia = CaptionTemplates.didascalia_foto(
-                titolo, proposte.link_myfinance(self.myfinance_url, isin), self.borsa.scheda(isin))
-            # La didascalia va ripetuta: editMessageMedia sostituisce anche quella
-            risultato = self.chiama_telegram('editMessageMedia', silenzioso=True, data={
-                'chat_id': self.config['telegram'].get('chat_id'),
-                'message_id': message_id,
-                'media': json.dumps({'type': 'photo', 'media': 'attach://foto',
-                                     'caption': didascalia, 'parse_mode': 'HTML'}),
-            }, files={'foto': (f"isin_chart_{isin}.png", png, 'image/png')})
+            if self.manda_grafico(titolo, prezzo, png):
+                print(f"🖼️ Grafico aggiornato per {titolo['nome']}")
         except Exception as errore:
             self._scrivi_errore_grafico(f"{isin}: {descrivi(errore)}")
             return False
-        errore = '' if risultato is not None else self.errore_telegram
-        if not errore or 'not modified' in errore:
-            self._prezzi_nei_grafici[isin] = prezzo
-            print(f"🖼️ Grafico aggiornato per {titolo['nome']}")
-        elif 'not found' in errore or 'MESSAGE_ID_INVALID' in errore:
-            # Il messaggio non c'è più (cancellato a mano): non si riprova
-            grafici = stato.leggi('grafici.json', {})
-            grafici.pop(isin, None)
-            stato.scrivi('grafici.json', grafici)
-            print(f"🗑️ Il grafico di {titolo['nome']} non è più nel canale: non lo aggiorno più")
-        else:
-            self._scrivi_errore_grafico(errore)
         return True
+
+    def manda_grafico(self, titolo: Dict, prezzo: float, png: bytes):
+        """Manda il grafico (didascalia breve: nome e link) e, se è partito, cancella il
+        precedente dello stesso titolo. Lo usano avvisi, /grafico e aggiornamenti."""
+        isin = titolo['isin']
+        inviato = self.send_telegram_photo(
+            png, CaptionTemplates.didascalia_foto(
+                titolo, proposte.link_myfinance(self.myfinance_url, isin), self.borsa.scheda(isin)),
+            f"isin_chart_{isin}.png")
+        if inviato:
+            self._prezzi_nei_grafici[isin] = prezzo
+            self.sostituisci_grafico(titolo, inviato)
+        return inviato
 
     def _scrivi_errore_grafico(self, errore: str) -> None:
         if errore not in self._errori_grafici:
@@ -647,12 +640,8 @@ class ISINMonitor:
         if tabella is None:
             tabella = TableDataGenerator.generate_table_data(prezzo, previous_price=precedente)
         scheda = self.borsa.scheda(titolo['isin'])
-        inviato = png and self.send_telegram_photo(
-            png, CaptionTemplates.didascalia_foto(titolo, link, scheda), f"isin_chart_{titolo['isin']}.png")
-        if inviato:
+        if png and self.manda_grafico(titolo, prezzo, png):
             print(f"📨 Grafico inviato per {titolo['nome']}")
-            self._prezzi_nei_grafici[titolo['isin']] = prezzo
-            self.sostituisci_grafico(titolo, inviato)
         elif self.send_telegram_message(CaptionTemplates.format_caption(titolo, prezzo, tabella,
                                                                         link, scheda)):
             print(f"📨 Messaggio inviato per {titolo['nome']}")

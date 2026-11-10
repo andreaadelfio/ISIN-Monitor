@@ -64,14 +64,16 @@ PC spento) e manda su Telegram i cambiamenti delle proposte di MyFinance.
   non riesce il log lo dice una volta. Riepilogo, proposte e messaggi di solo testo
   restano. Per spegnerlo: `telegram.cancella_grafico_precedente: false`.
   I grafici già nel canale si aggiornano da soli ogni 30 minuti
-  (`telegram.aggiorna_grafici_minuti`, 0 per spegnerlo; il primo giro 30 minuti dopo l'avvio)
-  e un'ultima volta alla chiusura, tutti anche col prezzo invariato, prima del riepilogo:
-  l'immagine cambia nello stesso messaggio, senza notifiche né messaggi nuovi. Lo fa il
+  (`telegram.aggiorna_grafici_minuti`, 0 per spegnerlo; il primo giro 30 minuti dopo
+  l'avvio) e un'ultima volta alla chiusura, prima del riepilogo: arriva un grafico
+  nuovo, con la notifica, e il vecchio si cancella, come per gli avvisi. Durante il
+  giorno un titolo col prezzo uguale all'ultimo grafico si salta, così le notifiche
+  arrivano solo per i grafici che cambiano; alla chiusura si rimandano tutti. Lo fa il
   thread degli avvisi quando non ha avvisi da mandare, un grafico ogni 3 secondi, quindi
-  i giri dei prezzi non rallentano e gli avvisi veri passano avanti. Durante il giorno un titolo col
-  prezzo uguale all'ultimo grafico si salta; se il messaggio non c'è più (cancellato a
-  mano) il titolo esce da `grafici.json`; gli altri errori vanno nel log una volta per
-  tipo.
+  i giri dei prezzi non rallentano e gli avvisi veri passano avanti. Se la foto non
+  parte il vecchio grafico resta e si riprova al giro dopo. Telegram non cancella
+  messaggi di più di 48 ore: il lunedì i grafici del venerdì restano nel canale (il log
+  lo dice una volta) e si cancellano a mano.
 - **Grafici**: solo da Supabase, quattro richieste per avviso. Immagine verticale per il
   telefono (1200×1800): in alto, a tutta larghezza, Oggi (tutti i prezzi di Borsa
   Italiana di oggi, con i punti verdi sopra l'apertura e rossi sotto); sotto, su due
@@ -194,7 +196,7 @@ python3 monitor.py --giro --ignora-orario      # un giro solo, anche fuori orari
 | `telegram.enabled`, `send_charts` | avvisi attivi; grafico o solo testo |
 | `telegram.comandi`, `riepilogo` | comandi del bot; riepilogo alla chiusura (tutti e due attivi se mancano) |
 | `telegram.cancella_grafico_precedente` | nel canale solo l'ultimo grafico di ogni titolo (attivo se manca) |
-| `telegram.aggiorna_grafici_minuti` | ogni quanto si aggiornano i grafici già nel canale (30 se manca, 0 per spegnerlo) |
+| `telegram.aggiorna_grafici_minuti` | ogni quanto arriva un grafico aggiornato dei titoli già nel canale (30 se manca, 0 per spegnerlo) |
 | `monitoring.market_hours_only`, `weekdays_only` | solo in orario di borsa, solo lun-ven |
 | `monitoring.cooldown_minuti` | minuti fra due avvisi sullo stesso titolo (3 se manca) |
 | `monitoring.market_open_time`, `market_close_time` | orario (anche del timer systemd) |
