@@ -26,7 +26,7 @@ import requests
 
 from . import posizioni, proposte, stato, storico
 from .database import Database, ErroreDatabase
-from .orario import INTERVALLO, in_orario, secondi_al_prossimo_giro
+from .orario import INTERVALLO, appena_chiuso, in_orario, secondi_al_prossimo_giro
 from .message_templates import CaptionTemplates
 from .price_providers import BorsaItalianaProvider, YahooFinanceProvider
 from .profiler import profile
@@ -411,8 +411,13 @@ class ISINMonitor:
         print(f"⏹️ Fine dei giri: {fatti} giri ({errori} con errori), {mandati} avvisi; "
               f"finisco quelli in coda ed esco")
         # Riepilogo e ultimo aggiornamento dei grafici solo alla vera chiusura, dopo una
-        # giornata di giri (non nelle prove)
+        # giornata di giri (non nelle prove), e non se il PC si risveglia dalla sospensione
+        # a orario finito: grafici e riepilogo arriverebbero di sera, coi prezzi fermi
         chiusura = fatti and not ignora_orario and giri is None and self.telegram_configured
+        if chiusura and not appena_chiuso(self.config['monitoring'], datetime.now()):
+            print(f"⏭️ Fine dei giri alle {datetime.now():%H:%M}, lontano dalla chiusura "
+                  f"(risveglio dalla sospensione?): niente riepilogo né grafici di chiusura")
+            chiusura = False
         if chiusura and self.aggiorna_grafici_ogni:
             coda.put(AGGIORNA_TUTTI)
         coda.join()

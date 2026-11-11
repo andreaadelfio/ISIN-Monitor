@@ -289,6 +289,7 @@ def test_monitora_esce_fuori_orario(monitor, monkeypatch):
 
 
 def test_riepilogo_alla_chiusura_dopo_i_giri(monitor, monkeypatch):
+    monkeypatch.setattr(modulo_app, 'appena_chiuso', lambda monitoring, adesso: True)
     orari = iter([True, False])
     monkeypatch.setattr(modulo_app, 'in_orario', lambda monitoring, adesso: next(orari))
     monitor.borsa = BorsaFinta({'IT0003132476': 20.0})
@@ -889,6 +890,7 @@ def test_grafici_uno_alla_volta_ogni_trenta_minuti(monitor):
 
 
 def test_alla_chiusura_tutti_i_grafici_dopo_gli_avvisi_e_prima_del_riepilogo(monitor, monkeypatch):
+    monkeypatch.setattr(modulo_app, 'appena_chiuso', lambda monitoring, adesso: True)
     # Come il 10/11: Amazon col prezzo invariato dall'ultimo grafico; alla chiusura si rimanda
     finto = prepara_grafici(monitor, IT0003132476=55, US0231351067=66)
     monitor._prezzi_nei_grafici['US0231351067'] = 221.0
@@ -908,3 +910,20 @@ def test_aggiornamento_grafici_spento(config):
     config['telegram']['aggiorna_grafici_minuti'] = 0
     istanza = ISINMonitor(config)
     assert istanza.aggiorna_grafici_ogni == 0 and istanza._attesa_avvisi() is None
+
+
+def test_risveglio_dalla_sospensione_a_sera_niente_chiusura(monitor, monkeypatch, capsys):
+    # 11/11: sospensione alle 16:40, risveglio alle 23:49 con il ciclo ancora acceso
+    class Sera(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime(2026, 11, 11, 23, 49, 45, tzinfo=tz)
+
+    finto = prepara_grafici(monitor, IT0003132476=55)
+    orari = iter([True, False])
+    monkeypatch.setattr(modulo_app, 'in_orario', lambda monitoring, adesso: next(orari))
+    monkeypatch.setattr(modulo_app, 'datetime', Sera)
+    monitor.borsa = BorsaFinta({})
+    monitor.monitora()
+    assert finto.mandati == []                               # né grafici né riepilogo
+    assert 'lontano dalla chiusura' in capsys.readouterr().out

@@ -70,6 +70,13 @@ def in_orario(monitoring: dict, adesso: datetime) -> bool:
     return apertura <= adesso.time().replace(tzinfo=None) <= chiusura
 
 
+def appena_chiuso(monitoring: dict, adesso: datetime, minuti: int = 15) -> bool:
+    """True nei `minuti` dopo la chiusura dello stesso giorno: la fine dei giri è la vera
+    chiusura e non un risveglio dalla sospensione, la sera o di notte."""
+    chiusura = datetime.combine(adesso.date(), _ora(monitoring.get('market_close_time', '18:05')))
+    return chiusura <= adesso.replace(tzinfo=None) <= chiusura + timedelta(minutes=minuti)
+
+
 def descrizione_orario(monitoring: dict) -> str:
     """Descrive l'orario configurato, es. 'lun-ven 08:55-18:05'."""
     if not monitoring.get('market_hours_only', True):

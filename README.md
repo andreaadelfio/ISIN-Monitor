@@ -103,7 +103,9 @@ PC spento) e manda su Telegram i cambiamenti delle proposte di MyFinance.
   `~/.local/state/isin-monitor/proposte.json` (la prima volta si salva senza messaggio).
 - **Riepilogo della giornata**: alla chiusura (18:05) un messaggio con tutti i titoli,
   l'ultimo prezzo e la variazione da ieri, dal migliore al peggiore
-  (`telegram.riepilogo: false` per spegnerlo).
+  (`telegram.riepilogo: false` per spegnerlo). Riepilogo e grafici di chiusura partono solo se
+  i giri finiscono entro 15 minuti dalla chiusura: se il PC si risveglia dalla sospensione
+  la sera, si saltano (il log lo dice).
 
 ## Comandi del bot Telegram
 

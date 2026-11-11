@@ -161,3 +161,13 @@ def test_stato_non_crea_il_lock(monkeypatch, capsys):
     monitor.mostra_stato()
     assert 'Monitor acceso: no' in capsys.readouterr().out
     assert not (stato.CARTELLA / 'monitor.lock').exists()
+
+
+def test_appena_chiuso_solo_nei_15_minuti_dopo_la_chiusura():
+    from core.orario import appena_chiuso
+    giorno = datetime(2026, 11, 11)
+    assert appena_chiuso(ORARIO, giorno.replace(hour=18, minute=5, second=1))
+    assert appena_chiuso(ORARIO, giorno.replace(hour=18, minute=19))
+    assert not appena_chiuso(ORARIO, giorno.replace(hour=18, minute=21))
+    assert not appena_chiuso(ORARIO, giorno.replace(hour=23, minute=49))   # risveglio la sera
+    assert not appena_chiuso(ORARIO, giorno.replace(hour=16, minute=40))
