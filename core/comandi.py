@@ -23,7 +23,7 @@ from zoneinfo import ZoneInfo
 
 from . import stato
 from .database import ErroreDatabase
-from .message_templates import decimali
+from .message_templates import decimali, emoji_variazione
 from .orario import descrizione_orario
 
 ROMA = ZoneInfo('Europe/Rome')
@@ -94,7 +94,7 @@ def testo_prezzi(db, titoli: List[Dict], adesso: datetime, intestazione: str = '
         if variazione is None:
             fine = '     —'
         else:
-            fine = f"{variazione:+6.2f}% " + ('📈' if variazione > 0 else '📉' if variazione < 0 else '⚪')
+            fine = f"{variazione:+6.2f}% " + emoji_variazione(variazione)
         # Prima si allinea, poi l'HTML (& diventa &amp; e sposterebbe le colonne)
         testo.append(escape(f"{nome_titolo:<{nome}} {prezzo_titolo:>{prezzo}} ") + fine)
     return (f"📊 <b>{intestazione or f'Prezzi alle {adesso:%H:%M}'}</b> (variazione da ieri)\n\n<code>"

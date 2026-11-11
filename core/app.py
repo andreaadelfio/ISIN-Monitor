@@ -334,8 +334,9 @@ class ISINMonitor:
         self.salva_prezzi(nuovi, titoli)
         supabase += time.monotonic() - prima_di_salvare
         stato.scrivi('titoli.json', titoli)
+        isin_nuovi = {riga['isin'] for riga in nuovi}
         cambiati = ', '.join(f"{t.get('simbolo_borsa') or t['nome']} {t['ultimo_prezzo']:g}"
-                             for t in titoli if t['isin'] in {riga['isin'] for riga in nuovi})
+                             for t in titoli if t['isin'] in isin_nuovi)
         durata = time.monotonic() - inizio
         self.ultimo_giro = (adesso, letti, len(titoli))
         # Un giro oltre i 15 secondi salta il successivo: si dice chi l'ha rallentato

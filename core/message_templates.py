@@ -18,28 +18,16 @@ def etichetta_segnale(segnale: Optional[str], punteggio) -> Optional[str]:
             + (f" · {punteggio}/100" if punteggio is not None else ''))
 
 
+def emoji_variazione(variazione: float) -> str:
+    return '📈' if variazione > 0 else '📉' if variazione < 0 else '⚪'
+
+
 def decimali(prezzo: float) -> int:
     """Decimali per i prezzi di un messaggio: 2 da 10 € in su, 3 da 1 €, 4 sotto."""
     return 2 if abs(prezzo) >= 10 else 3 if abs(prezzo) >= 1 else 4
 
 
 class CaptionTemplates:
-    
-    @staticmethod
-    def _get_percentage_emoji(percentage: float, is_positive_good: bool = True) -> str:
-        """
-        Restituisce l'emoji grafico/trend appropriata per una percentuale
-        
-        Args:
-            percentage: La percentuale di variazione
-            is_positive_good: True se valori positivi sono buoni (default), False altrimenti
-        """
-        if percentage > 0:
-            return "📈" if is_positive_good else "📉"
-        elif percentage < 0:
-            return "📉" if is_positive_good else "📈"
-        else:
-            return "⚪"
 
     @staticmethod
     def link(isin: str, myfinance_url: Optional[str] = None, borsa_url: Optional[str] = None) -> str:
@@ -86,7 +74,7 @@ class CaptionTemplates:
         prima = next((row for row in table_data if row['label'] == 'Prima'), None)
         ieri = next((row for row in table_data if row['label'] == '1gg'), None)
         riferimento = prima or ieri
-        variazione = (f" {CaptionTemplates._get_percentage_emoji(riferimento['variation'])} "
+        variazione = (f" {emoji_variazione(riferimento['variation'])} "
                       f"{riferimento['variation']:+.2f}%" + ('' if prima else ' da ieri')
                       if riferimento else '')
         righe_messaggio = [f"<b>{company_name}</b> €{NumberFormatter.format_number(current_price)}"

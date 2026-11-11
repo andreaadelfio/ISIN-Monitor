@@ -44,92 +44,35 @@ class TableDataGenerator:
     
     @staticmethod
     @profile()
-    def generate_table_data(current_price: float, opening_price: Optional[float] = None, 
-                           previous_price: Optional[float] = None, 
-                           historical_prices: Optional[Dict[int, float]] = None,
-                           oldest_price: Optional[float] = None,
-                           position: Optional[Dict] = None,
-                           extremes: Optional[tuple] = None):
-        """
-        Genera i dati per la tabella in formato standardizzato.
-        
-        Returns:
-            List[Dict]: Lista di righe con keys: 'label', 'price', 'variation', 'difference'
-        """
-        table_rows = []
-        
-        # Riga prezzo attuale vs previous_price
+    def generate_table_data(current_price: float, opening_price: Optional[float] = None,
+                            previous_price: Optional[float] = None,
+                            historical_prices: Optional[Dict[int, float]] = None,
+                            oldest_price: Optional[float] = None,
+                            position: Optional[Dict] = None,
+                            extremes: Optional[tuple] = None):
+        """Le righe della tabella: {'label', 'price', 'variation', 'difference'} (più 'quote'
+        per il carico), con variazione e differenza del prezzo attuale da ogni riferimento."""
+
+        def riga(label: str, price: float, **altro) -> Dict:
+            difference = current_price - price
+            return {'label': label, 'price': price, 'variation': difference / price * 100,
+                    'difference': difference, **altro}
+
+        righe = []
         if previous_price:
-            price_change = ((current_price - previous_price) / previous_price) * 100
-            price_diff = current_price - previous_price
-            table_rows.append({
-                'label': 'Prima',
-                'price': previous_price,
-                'variation': price_change,
-                'difference': price_diff,
-                'reference_price': previous_price
-            })
-
-        # Riga rispetto ad apertura (se disponibile)
+            righe.append(riga('Prima', previous_price))
         if opening_price and opening_price != current_price:
-            price_diff = current_price - opening_price
-            price_change = (price_diff / opening_price) * 100
-            table_rows.append({
-                'label': 'Apertura',
-                'price': opening_price,
-                'variation': price_change,
-                'difference': price_diff,
-                'reference_price': opening_price
-            })
-
-        # Righe storiche
-        if historical_prices:
-            for days in sorted(historical_prices.keys()):
-                price = historical_prices[days]
-                if price is not None:
-                    price_diff = current_price - price
-                    variation = (price_diff / price) * 100
-                    table_rows.append({
-                        'label': f'{days}gg',
-                        'price': price,
-                        'variation': variation,
-                        'difference': price_diff,
-                        'reference_price': price
-                    })
-        
+            righe.append(riga('Apertura', opening_price))
+        for days, price in sorted((historical_prices or {}).items()):
+            if price is not None:
+                righe.append(riga(f'{days}gg', price))
         if oldest_price is not None and oldest_price > 0:
-            price_diff = current_price - oldest_price
-            variation = (price_diff / oldest_price) * 100
-            table_rows.append({
-                'label': 'Inizio',
-                'price': oldest_price,
-                'variation': variation,
-                'difference': price_diff,
-                'reference_price': oldest_price
-            })
-
+            righe.append(riga('Inizio', oldest_price))
         # Massimo e minimo del periodo più lungo dei grafici (le righe del pannello annuale)
         for label, price in zip(('Max', 'Min'), extremes or ()):
             if price:
-                price_diff = current_price - price
-                table_rows.append({
-                    'label': label,
-                    'price': price,
-                    'variation': (price_diff / price) * 100,
-                    'difference': price_diff,
-                    'reference_price': price
-                })
-
+                righe.append(riga(label, price))
         # La tua posizione (prezzo di carico di MyFinance), con le quote per il totale
         if position:
-            price_diff = current_price - position['prezzo']
-            table_rows.append({
-                'label': 'Carico',
-                'price': position['prezzo'],
-                'variation': (price_diff / position['prezzo']) * 100,
-                'difference': price_diff,
-                'reference_price': position['prezzo'],
-                'quote': position['quote'],
-            })
-        return table_rows
-    
+            righe.append(riga('Carico', position['prezzo'], quote=position['quote']))
+        return righe
